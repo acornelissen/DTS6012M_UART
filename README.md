@@ -41,7 +41,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
 
 ## Installation
 
-1.  **Library Manager (Recommended if published):**
+1.  **Library Manager:**
     * Open the Arduino IDE.
     * Go to `Sketch` -> `Include Library` -> `Manage Libraries...`
     * Search for `DTS6012M_UART`.
