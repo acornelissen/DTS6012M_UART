@@ -15,7 +15,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
 * Initializes UART communication with the sensor.
 * Starts the sensor's continuous measurement stream.
 * Parses incoming data frames according to the datasheet protocol.
-* Performs Modbus CRC-16 checksum validation for data integrity.
+* Performs Modbus CRC-16 checksum validation for data integrity (can be optionally disabled for performance).
 * Provides easy-to-use functions to retrieve:
     * Primary Target Distance (mm)
     * Primary Target Intensity
@@ -23,6 +23,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
     * Secondary Target Intensity
     * Sunlight Base Level
     * Correction Values (Primary & Secondary)
+* Allows disabling the CRC check via `enableCRC(false)` for potentially faster updates, at the risk of accepting corrupted data.
 * Includes a basic example sketch demonstrating usage with the Serial Monitor.
 
 ## Hardware Requirements
@@ -90,6 +91,11 @@ void setup() {
     while (1); // Halt
   }
   Serial.println("Sensor initialized.");
+
+  // --- Optional: Disable CRC Check ---
+  // For maximum performance, you can disable the CRC check.
+  // This reduces processing overhead but increases the risk of using corrupted data if transmission errors occur.
+  // dtsSensor.enableCRC(false); // CRC is ENABLED by default. Uncomment this line to disable it.
 }
 
 void loop() {

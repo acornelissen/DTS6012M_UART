@@ -72,6 +72,10 @@ public:
   // payloadLength: Number of bytes in dataPayload.
   void sendCommand(byte cmd, const byte *dataPayload = NULL, uint16_t payloadLength = 0);
 
+  // Enable/Disable CRC Check: Controls whether the CRC checksum is validated on incoming frames.
+  // Disabling improves performance but risks accepting corrupted data. Enabled by default.
+  void enableCRC(bool enable);
+
 private:
   // --- Private Members ---
   HardwareSerial &_serial; // Reference to the hardware serial port instance
@@ -89,6 +93,7 @@ private:
   uint16_t _correctionSecondary;
   uint16_t _sunlightBase;
   bool _newDataAvailable; // Flag used internally (could be made public if needed)
+  bool _crcCheckEnabled;  // Flag to control CRC validation
 
 
   // --- Private Helper Methods ---

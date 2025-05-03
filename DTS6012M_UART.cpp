@@ -16,6 +16,7 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort) : _serial(serialPort) {
   _sunlightBase = 0;
   _newDataAvailable = false;
   _lastUpdateTime = 0;
+  _crcCheckEnabled = true; // Enable CRC check by default
 }
 
 /**
@@ -123,15 +124,17 @@ bool DTS6012M_UART::parseFrame() {
     return false; // Incorrect payload length
   }
 
-  // 3. Validate CRC Checksum (Last 2 bytes, MSB first in frame)
-  //    CRC is calculated over the frame *excluding* the last two CRC bytes themselves.
-  uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
-  uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
+  // 3. Validate CRC Checksum (if enabled)
+  if (_crcCheckEnabled) {
+    // CRC is calculated over the frame *excluding* the last two CRC bytes themselves.
+    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
+    uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
 
-  if (calculatedCRC != receivedCRC) {
-    // Serial.print("Debug: CRC FAIL! Calc: 0x"); Serial.print(calculatedCRC, HEX); // Optional Debugging
-    // Serial.print(" Recv: 0x"); Serial.println(receivedCRC, HEX); // Optional Debugging
-    return false; // CRC check failed, data corrupted
+    if (calculatedCRC != receivedCRC) {
+      // Serial.print("Debug: CRC FAIL! Calc: 0x"); Serial.print(calculatedCRC, HEX); // Optional Debugging
+      // Serial.print(" Recv: 0x"); Serial.println(receivedCRC, HEX); // Optional Debugging
+      return false; // CRC check failed, data corrupted
+    }
   }
 
   // --- If all checks pass, extract the data ---
@@ -180,6 +183,15 @@ uint16_t DTS6012M_UART::getSecondaryIntensity() {
 
 uint16_t DTS6012M_UART::getSecondaryCorrection() {
     return _correctionSecondary;
+}
+
+/**
+ * @brief Enables or disables the CRC check for incoming frames.
+ * @param enable Set to true to enable CRC validation (default), false to disable.
+ *               Disabling improves performance but increases the risk of accepting corrupted data.
+ */
+void DTS6012M_UART::enableCRC(bool enable) {
+    _crcCheckEnabled = enable;
 }
 
 
