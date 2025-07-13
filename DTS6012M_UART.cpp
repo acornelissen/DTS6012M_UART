@@ -36,7 +36,7 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort) : _serial(serialPort)
 bool DTS6012M_UART::begin(unsigned long baudRate)
 {
   _serial.begin(baudRate);
-  delay(10); // Short delay to allow serial port to stabilize
+  delay(DTS_SERIAL_STABILIZATION_DELAY_MS); // Short delay to allow serial port to stabilize
 
   // Check if the hardware serial port started correctly
   if (!_serial)
@@ -116,8 +116,8 @@ bool DTS6012M_UART::update()
     } // End of State 2
   } // End while (_serial.available())
 
-  if (millis() - _lastUpdateTime > 1000)
-  { // Example: 1 second timeout
+  if (millis() - _lastUpdateTime > DTS_COMMUNICATION_TIMEOUT_MS)
+  { // Communication timeout
     // Serial.println("Warning: Sensor communication timeout?"); // Keep this commented unless debugging
     _lastUpdateTime = millis(); // Reset timer to avoid continuous warnings
     _rxBufferIndex = 0;         // Reset buffer state
@@ -170,17 +170,14 @@ bool DTS6012M_UART::parseFrame()
   }
 
   // --- If all checks pass, extract the data ---
-  // Data payload starts at index 7 of the full frame buffer.
-  const int dataPayloadOffset = 7;
-
-  // Extract values (remembering datasheet specifies LSB first for data fields)
-  _distanceSecondary_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
-  _correctionSecondary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR];
-  _intensitySecondary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT];
-  _distancePrimary_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST];
-  _correctionPrimary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR];
-  _intensityPrimary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT];
-  _sunlightBase = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE];
+  // Extract values using helper function (datasheet specifies LSB first for data fields)
+  _distanceSecondary_mm = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_SEC_DIST);
+  _correctionSecondary = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_SEC_CORR);
+  _intensitySecondary = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_SEC_INT);
+  _distancePrimary_mm = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_PRI_DIST);
+  _correctionPrimary = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_PRI_CORR);
+  _intensityPrimary = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_PRI_INT);
+  _sunlightBase = extractUint16LSB(DTS_DATA_PAYLOAD_OFFSET + DTS_IDX_SUN_BASE);
 
   return true; // Frame successfully parsed and data extracted
 }
@@ -258,9 +255,14 @@ void DTS6012M_UART::disableSensor()
  */
 void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payloadLength)
 {
-  // Calculate required frame size: Fixed parts (7) + payload + CRC (2)
-  int frameSize = 9 + payloadLength;
-  byte frame[frameSize]; // Consider dynamic allocation or a max-size buffer if payloadLength can be very large
+  // Validate payload length
+  if (DTS_FRAME_HEADER_SIZE + payloadLength + DTS_FRAME_CRC_SIZE > DTS_MAX_FRAME_SIZE) {
+    return; // Payload too large, cannot send
+  }
+
+  // Calculate required frame size: Header + payload + CRC
+  int frameSize = DTS_FRAME_HEADER_SIZE + payloadLength + DTS_FRAME_CRC_SIZE;
+  byte frame[DTS_MAX_FRAME_SIZE]; // Use fixed-size buffer for safety
   int frameIndex = 0;
 
   // 1. Build Frame Header & Info
@@ -580,4 +582,14 @@ uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len)
 #endif
   }
   return crc; // No final XOR for standard Modbus CRC
+}
+
+/**
+ * @brief Helper function to extract 16-bit value from buffer (LSB first ordering)
+ * @param offset The offset in the _rxBuffer to start extraction
+ * @return The extracted 16-bit value
+ */
+uint16_t DTS6012M_UART::extractUint16LSB(int offset) const
+{
+  return ((uint16_t)_rxBuffer[offset + 1] << 8) | _rxBuffer[offset];
 }

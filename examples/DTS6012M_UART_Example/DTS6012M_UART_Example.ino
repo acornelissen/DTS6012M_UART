@@ -20,13 +20,13 @@ HardwareSerial &SensorSerial = Serial1; // Change to Serial2 etc. if needed
 // Create an instance of the sensor library, passing the chosen serial port
 DTS6012M_UART dtsSensor(SensorSerial);
 
-// --- Timing for printing data and demo ---
-unsigned long lastPrintTime = 0;
-const unsigned long PRINT_INTERVAL_MS = 100; // How often to print results (milliseconds)
-
-// --- Enable/Disable demo timing ---
-unsigned long lastToggleTime = 0;
+// --- Timing constants ---
+const unsigned long PRINT_INTERVAL_MS = 100;  // How often to print results (milliseconds)
 const unsigned long TOGGLE_INTERVAL_MS = 5000; // Toggle sensor every 5 seconds
+
+// --- Timing variables ---
+unsigned long lastPrintTime = 0;
+unsigned long lastToggleTime = 0;
 bool sensorEnabled = true;
 
 void setup() {
@@ -95,26 +95,18 @@ void loop() {
     Serial.print("\t Intensity: ");
     Serial.print(intensity);
 
-    // Example of printing secondary target data (optional)
-    /*
-    Serial.print("\t | Secondary Dist: ");
-    if (sec_distance_mm == 0xFFFF) {
-       Serial.print("---- mm");
-    } else {
-       Serial.print(sec_distance_mm);
-       Serial.print(" mm");
-    }
-    Serial.print("\t Intensity: ");
-    Serial.print(sec_intensity);
-    */
+    // Uncomment to also print secondary target data:
+    // uint16_t sec_distance_mm = dtsSensor.getSecondaryDistance();
+    // uint16_t sec_intensity = dtsSensor.getSecondaryIntensity();
+    // Serial.print("\t | Secondary: ");
+    // Serial.print((sec_distance_mm == 0xFFFF) ? "---- mm" : String(sec_distance_mm) + " mm");
+    // Serial.print(" ("); Serial.print(sec_intensity); Serial.print(")");
 
     Serial.println(); // New line for next reading
 
   } // End of printing block
 
-  // --- Your other application code can go here ---
-  // The loop should run quickly to allow dtsSensor.update() to be called frequently.
-  // Avoid long delays in the main loop if possible.
-  // delay(1); // A very small delay might be acceptable if needed
+  // Keep loop running fast for frequent sensor updates
+  // Avoid long delays in main loop
 
 } // End of loop()

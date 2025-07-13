@@ -27,6 +27,16 @@ const byte DTS_CMD_STOP_STREAM = 0x02;
 const int DTS_RESPONSE_FRAME_LENGTH = 23; // Full frame size: Header(1)+DevNo(1)+DevType(1)+CMD(1)+Res(1)+Len(2)+Data(14)+CRC(2)
 const int DTS_DATA_LENGTH_EXPECTED = 14;  // Expected data payload size
 
+// Frame structure constants
+const int DTS_FRAME_HEADER_SIZE = 7;      // Header to end of length field
+const int DTS_FRAME_CRC_SIZE = 2;         // CRC field size
+const int DTS_DATA_PAYLOAD_OFFSET = 7;    // Offset to data payload in frame
+const int DTS_MAX_FRAME_SIZE = 64;        // Maximum supported frame size
+
+// Timing constants
+const unsigned long DTS_SERIAL_STABILIZATION_DELAY_MS = 10;  // Delay after serial.begin()
+const unsigned long DTS_COMMUNICATION_TIMEOUT_MS = 1000;     // Communication timeout
+
 // Indices within the 14-byte data payload (LSB first ordering)
 const int DTS_IDX_SEC_DIST = 0; // Secondary Target Distance (2 bytes)
 const int DTS_IDX_SEC_CORR = 2; // Secondary Target Correction (2 bytes)
@@ -110,6 +120,9 @@ private:
 
   // calculateCRC16: Computes the Modbus CRC-16 checksum for given data.
   uint16_t calculateCRC16(const byte *data, int len);
+
+  // extractUint16LSB: Helper function to extract 16-bit value from buffer (LSB first)
+  uint16_t extractUint16LSB(int offset) const;
 };
 
 #endif // DTS6012M_UART_H
