@@ -20,9 +20,14 @@ HardwareSerial &SensorSerial = Serial1; // Change to Serial2 etc. if needed
 // Create an instance of the sensor library, passing the chosen serial port
 DTS6012M_UART dtsSensor(SensorSerial);
 
-// --- Timing for printing data ---
+// --- Timing for printing data and demo ---
 unsigned long lastPrintTime = 0;
 const unsigned long PRINT_INTERVAL_MS = 100; // How often to print results (milliseconds)
+
+// --- Enable/Disable demo timing ---
+unsigned long lastToggleTime = 0;
+const unsigned long TOGGLE_INTERVAL_MS = 5000; // Toggle sensor every 5 seconds
+bool sensorEnabled = true;
 
 void setup() {
   // Initialize the Serial Monitor for output/debugging
@@ -46,13 +51,27 @@ void setup() {
 }
 
 void loop() {
+  // --- Demo: Enable/Disable sensor every 5 seconds ---
+  unsigned long currentTime = millis();
+  if (currentTime - lastToggleTime >= TOGGLE_INTERVAL_MS) {
+    lastToggleTime = currentTime;
+    sensorEnabled = !sensorEnabled;
+    
+    if (sensorEnabled) {
+      Serial.println("=== ENABLING SENSOR ===");
+      dtsSensor.enableSensor();
+    } else {
+      Serial.println("=== DISABLING SENSOR ===");
+      dtsSensor.disableSensor();
+    }
+  }
+
   // *** Crucial Step: Call the library's update() function frequently ***
   // This function reads incoming serial data and parses complete frames.
   // It returns true if a new valid measurement was parsed in this call.
   bool newDataReceived = dtsSensor.update();
 
   // Check if new data is available AND if enough time has passed since the last print
-  unsigned long currentTime = millis();
   if (newDataReceived && (currentTime - lastPrintTime >= PRINT_INTERVAL_MS)) {
     lastPrintTime = currentTime; // Update the last print time
 

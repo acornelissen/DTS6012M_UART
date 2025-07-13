@@ -76,6 +76,12 @@ public:
   // Disabling improves performance but risks accepting corrupted data. Enabled by default.
   void enableCRC(bool enable);
 
+  // Enable Sensor: Starts the measurement stream from the sensor.
+  void enableSensor();
+
+  // Disable Sensor: Stops the measurement stream from the sensor.
+  void disableSensor();
+
 private:
   // --- Private Members ---
   HardwareSerial &_serial; // Reference to the hardware serial port instance

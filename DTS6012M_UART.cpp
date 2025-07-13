@@ -233,6 +233,24 @@ void DTS6012M_UART::enableCRC(bool enable)
 }
 
 /**
+ * @brief Enables the sensor by sending the START_STREAM command.
+ * This starts the continuous measurement stream from the sensor.
+ */
+void DTS6012M_UART::enableSensor()
+{
+  sendCommand(DTS_CMD_START_STREAM, NULL, 0);
+}
+
+/**
+ * @brief Disables the sensor by sending the STOP_STREAM command.
+ * This stops the continuous measurement stream from the sensor.
+ */
+void DTS6012M_UART::disableSensor()
+{
+  sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+}
+
+/**
  * @brief Sends a command frame to the sensor.
  * @param cmd The command byte code (e.g., DTS_CMD_STOP_STREAM).
  * @param dataPayload Pointer to the data bytes to include in the frame (NULL if none).

@@ -13,7 +13,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
 ## Features
 
 * Initializes UART communication with the sensor.
-* Starts the sensor's continuous measurement stream.
+* Starts and stops the sensor's continuous measurement stream with `enableSensor()` and `disableSensor()`.
 * Parses incoming data frames according to the datasheet protocol.
 * Performs Modbus CRC-16 checksum validation for data integrity (can be optionally disabled for performance).
 * Provides easy-to-use functions to retrieve:
@@ -24,7 +24,8 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
     * Sunlight Base Level
     * Correction Values (Primary & Secondary)
 * Allows disabling the CRC check via `enableCRC(false)` for potentially faster updates, at the risk of accepting corrupted data.
-* Includes a basic example sketch demonstrating usage with the Serial Monitor.
+* Sensor enable/disable control for power management and measurement control.
+* Includes example sketch demonstrating usage with enable/disable functionality.
 
 ## Hardware Requirements
 
@@ -96,6 +97,10 @@ void setup() {
   // For maximum performance, you can disable the CRC check.
   // This reduces processing overhead but increases the risk of using corrupted data if transmission errors occur.
   // dtsSensor.enableCRC(false); // CRC is ENABLED by default. Uncomment this line to disable it.
+  
+  // --- Optional: Control sensor enable/disable ---
+  // dtsSensor.disableSensor(); // Stop measurements
+  // dtsSensor.enableSensor();  // Resume measurements
 }
 
 void loop() {
