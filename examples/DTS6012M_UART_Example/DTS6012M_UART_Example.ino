@@ -10,15 +10,17 @@
  * - Arduino RX1 (e.g., Pin 19 on Mega) <- Sensor Pin 3 (UART_TX)
  * - Arduino TX1 (e.g., Pin 18 on Mega) -> Sensor Pin 4 (UART_RX)
  *
- * Note: Use a HardwareSerial port (Serial1, Serial2, etc.) as the default
- * baud rate (921600) is too high for SoftwareSerial.
+ * Note on Serial Ports:
+ * It is highly recommended to use a HardwareSerial port (Serial1, Serial2, etc.)
+ * because the sensor's default baud rate of 921600 is too fast for most
+ * SoftwareSerial implementations, which can lead to unreliable communication.
  */
 
 // Select the HardwareSerial port connected to the sensor
 HardwareSerial &SensorSerial = Serial1; // Change to Serial2 etc. if needed
 
-// Create an instance of the sensor library, passing the chosen serial port
-DTS6012M_UART dtsSensor(SensorSerial);
+// Create an instance of the sensor library, using the new namespace
+DTS6012M::UART dtsSensor(SensorSerial);
 
 // --- Timing constants ---
 const unsigned long PRINT_INTERVAL_MS = 100;  // How often to print results (milliseconds)
@@ -32,16 +34,22 @@ bool sensorEnabled = true;
 void setup() {
   // Initialize the Serial Monitor for output/debugging
   Serial.begin(115200); // Use a standard baud rate for the monitor
-  while (!Serial);      // Wait for Serial Monitor to open (optional)
+  while (!Serial);      // Wait for Serial Monitor to open (for some boards)
   Serial.println("--- DTS6012M UART Library Example ---");
+
+  // --- Optional: Enable Debugging ---
+  // Uncomment the following line to get detailed debug information from the library
+  // printed to the Serial Monitor. This is useful for troubleshooting.
+  // dtsSensor.setDebugStream(&Serial);
+
   Serial.println("Attempting to initialize sensor...");
 
-  // Initialize the sensor library. This starts Serial1 (or your chosen port)
+  // Initialize the sensor library. This starts the chosen hardware serial port
   // at 921600 baud (default) and sends the start stream command.
   if (dtsSensor.begin()) {
     Serial.println("Sensor initialization successful.");
   } else {
-    Serial.println("ERROR: Sensor initialization failed! Check wiring and Serial port selection.");
+    Serial.println("ERROR: Sensor initialization failed! Check wiring, port selection, and power.");
     // Halt execution if sensor fails to initialize
     while (1) {
       delay(100);
@@ -68,14 +76,14 @@ void loop() {
 
   // *** Crucial Step: Call the library's update() function frequently ***
   // This function reads incoming serial data and parses complete frames.
-  // It returns true if a new valid measurement was parsed in this call.
-  bool newDataReceived = dtsSensor.update();
+  dtsSensor.update();
 
-  // Check if new data is available AND if enough time has passed since the last print
-  if (newDataReceived && (currentTime - lastPrintTime >= PRINT_INTERVAL_MS)) {
+  // Check if new data is available using the isDataNew() method.
+  // This is more explicit than checking the return value of update() in the main loop.
+  if (dtsSensor.isDataNew() && (currentTime - lastPrintTime >= PRINT_INTERVAL_MS)) {
     lastPrintTime = currentTime; // Update the last print time
 
-    // Get the latest data using the library's getter functions
+    // Get the latest data. Calling getDistance() also clears the isDataNew() flag.
     uint16_t distance_mm = dtsSensor.getDistance();
     uint16_t intensity = dtsSensor.getIntensity();
     // uint16_t sunlight = dtsSensor.getSunlightBase(); // Uncomment if needed
@@ -85,7 +93,7 @@ void loop() {
     // Print the primary target data
     Serial.print("Primary Dist: ");
     if (distance_mm == 0xFFFF) {
-      // 0xFFFF often indicates an invalid reading or no target detected
+      // 0xFFFF indicates an invalid reading or no target detected
       Serial.print("---- mm");
     } else {
       Serial.print(distance_mm);
@@ -106,7 +114,7 @@ void loop() {
 
   } // End of printing block
 
-  // Keep loop running fast for frequent sensor updates
-  // Avoid long delays in main loop
+  // The main loop should run as fast as possible to ensure the serial buffer
+  // is processed promptly. Avoid using long delay() calls here.
 
 } // End of loop()
