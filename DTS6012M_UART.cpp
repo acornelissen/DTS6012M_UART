@@ -163,8 +163,9 @@ DTSError DTS6012M_UART::parseFrame()
 
   // 3. Validate CRC checksum (if enabled)
   if (_config.crcEnabled) {
-    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2] << 8) | 
-                           _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1];
+    // Sensor transmits CRC bytes LSB first, so reconstruct by reading the final byte as MSB.
+    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | 
+                           _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
     uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
 
     if (calculatedCRC != receivedCRC) {
