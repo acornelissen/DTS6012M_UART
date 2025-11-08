@@ -160,7 +160,8 @@ enum class DTSError : byte {
   CRC_CHECK_FAILED = 0x04,        // CRC validation failed
   BUFFER_OVERFLOW = 0x05,         // Buffer overflow detected
   TIMEOUT = 0x06,                 // Communication timeout
-  INVALID_COMMAND = 0x07          // Invalid command parameter
+  INVALID_COMMAND = 0x07,         // Invalid command parameter
+  UNSUPPORTED_OPERATION = 0x08    // Feature not implemented by sensor firmware
 };
 
 // Error handling example
@@ -256,6 +257,19 @@ sensor.setDistanceScale(1.05f);    // Apply 5% scaling
 
 // Calibration is applied automatically to all measurements
 uint16_t calibratedDistance = sensor.getDistance();
+```
+
+### Resetting Library State
+
+```cpp
+// Clear calibration tweaks, rolling statistics, and error history
+sensor.resetState();
+
+// Compatibility helper: still performs a soft reset but returns UNSUPPORTED_OPERATION
+DTSError factoryResult = sensor.factoryReset();
+if (factoryResult == DTSError::UNSUPPORTED_OPERATION) {
+  Serial.println("Sensor firmware exposes no factory-reset command; local state was cleared instead.");
+}
 ```
 
 ### Advanced Control

@@ -2,7 +2,35 @@
 #define DTS6012M_UART_H
 
 #include <Arduino.h>
+
+#if defined(DTS6012M_TEST_MODE)
+/**
+ * @brief Lightweight HardwareSerial stub used exclusively during unit tests.
+ * It provides the minimal interface the library relies on, avoiding MCU-specific constructors.
+ */
+class HardwareSerial : public Stream {
+public:
+  virtual void begin(unsigned long) {}
+  virtual void begin(unsigned long, uint16_t) {}
+  virtual void end() {}
+  virtual int available() override = 0;
+  virtual int read() override = 0;
+  virtual int peek() override = 0;
+  virtual void flush() override {}
+  virtual size_t write(uint8_t) override = 0;
+  virtual size_t write(const uint8_t *buffer, size_t size) override {
+    size_t written = 0;
+    for (size_t i = 0; i < size; ++i) {
+      written += write(buffer[i]);
+    }
+    return written;
+  }
+  virtual int availableForWrite() { return 0; }
+  virtual operator bool() const { return true; }
+};
+#else
 #include <HardwareSerial.h>
+#endif
 
 // --- Enhanced Constants and Types ---
 // Protocol constants (using constexpr for compile-time evaluation)
@@ -32,7 +60,8 @@ enum class DTSError : byte {
   CRC_CHECK_FAILED = 0x04,
   BUFFER_OVERFLOW = 0x05,
   TIMEOUT = 0x06,
-  INVALID_COMMAND = 0x07
+  INVALID_COMMAND = 0x07,
+  UNSUPPORTED_OPERATION = 0x08
 };
 
 // Data quality indicators
@@ -224,8 +253,14 @@ public:
   DTSResult disableSensor();
 
   /**
-   * @brief Reset sensor to factory defaults
-   * @return DTSError::NONE on success, error code on failure
+   * @brief Clear library-side calibration, statistics, and error history.
+   * @return DTSError::NONE upon completion
+   */
+  DTSError resetState();
+
+  /**
+   * @brief Compatibility shim for firmware that previously expected a factory reset command.
+   * Returns DTSError::UNSUPPORTED_OPERATION because the datasheet exposes no such command.
    */
   DTSError factoryReset();
 
@@ -359,6 +394,11 @@ private:
    * @return true if timeout detected
    */
   bool isTimeout() const;
+
+  /**
+   * @brief Record an error for diagnostics/statistics.
+   */
+  void recordError(DTSError error);
 };
 
 #endif // DTS6012M_UART_H

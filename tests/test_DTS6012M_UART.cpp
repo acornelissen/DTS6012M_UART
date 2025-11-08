@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#define DTS6012M_TEST_MODE
 #include "DTS6012M_UART.h"
 
 // Mock Serial class for testing
@@ -12,7 +13,7 @@ private:
 public:
   MockSerial() : _mockBufferIndex(0), _mockReadIndex(0), _isAvailable(true) {}
   
-  void begin(unsigned long baud) override {
+  void begin(unsigned long) override {
     _isAvailable = true;
   }
   
@@ -27,10 +28,21 @@ public:
   int available() override {
     return _mockBufferIndex - _mockReadIndex;
   }
+
+  int availableForWrite() override {
+    return 256 - _mockBufferIndex;
+  }
   
   int read() override {
     if (_mockReadIndex < _mockBufferIndex) {
       return _mockBuffer[_mockReadIndex++];
+    }
+    return -1;
+  }
+
+  int peek() override {
+    if (_mockReadIndex < _mockBufferIndex) {
+      return _mockBuffer[_mockReadIndex];
     }
     return -1;
   }
@@ -129,8 +141,7 @@ TestFramework testFramework;
 MockSerial mockSerial;
 
 // Test helper functions
-byte calculateTestCRC16(const byte *data, int len) {
-  // Simplified CRC for testing - use actual implementation
+uint16_t calculateTestCRC16(const byte *data, int len) {
   uint16_t crc = 0xFFFF;
   for (int i = 0; i < len; i++) {
     crc ^= data[i];
@@ -143,6 +154,12 @@ byte calculateTestCRC16(const byte *data, int len) {
     }
   }
   return crc;
+}
+
+void updateFrameCRC(byte *frame) {
+  uint16_t crc = calculateTestCRC16(frame, 21);
+  frame[21] = crc & 0xFF;         // CRC LSB
+  frame[22] = (crc >> 8) & 0xFF;  // CRC MSB
 }
 
 void createValidFrame(byte *frame) {
@@ -164,10 +181,7 @@ void createValidFrame(byte *frame) {
   frame[17] = 0x64; frame[18] = 0x00; // Primary Intensity (100)
   frame[19] = 0x32; frame[20] = 0x00; // Sunlight Base (50)
   
-  // Calculate and add CRC
-  uint16_t crc = calculateTestCRC16(frame, 21);
-  frame[21] = crc & 0xFF;         // CRC LSB
-  frame[22] = (crc >> 8) & 0xFF;  // CRC MSB
+  updateFrameCRC(frame);
 }
 
 // Individual test functions
@@ -210,6 +224,7 @@ void testFrameParsing() {
   
   DTS6012M_UART sensor(mockSerial);
   sensor.begin();
+  sensor.resetState();
   mockSerial.resetMock();
   
   // Test valid frame parsing
@@ -238,19 +253,25 @@ void testErrorHandling() {
   // Test invalid header
   byte invalidFrame[23];
   createValidFrame(invalidFrame);
-  invalidFrame[0] = 0xFF; // Invalid header
+  invalidFrame[1] = 0xFF; // Invalid device number to trigger header check failure
+  updateFrameCRC(invalidFrame);
   mockSerial.mockIncomingData(invalidFrame, 23);
   
   DTSError result = sensor.update();
   testFramework.assertTrue(result != DTSError::NONE, "Invalid header detection");
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(1, stats.errorCount, "Error count increments on header failure");
   
   // Test invalid length
   createValidFrame(invalidFrame);
   invalidFrame[6] = 0xFF; // Invalid length
+  updateFrameCRC(invalidFrame);
   mockSerial.mockIncomingData(invalidFrame, 23);
   
   result = sensor.update();
   testFramework.assertTrue(result != DTSError::NONE, "Invalid length detection");
+  stats = sensor.getStatistics();
+  testFramework.assertEqual(2, stats.errorCount, "Error count increments on subsequent failures");
 }
 
 void testDataQuality() {
@@ -273,6 +294,7 @@ void testDataQuality() {
   byte validFrame[23];
   createValidFrame(validFrame);
   validFrame[17] = 0xC8; validFrame[18] = 0x00; // High intensity (200)
+  updateFrameCRC(validFrame);
   mockSerial.mockIncomingData(validFrame, 23);
   
   sensor.update();
@@ -306,6 +328,7 @@ void testStatistics() {
   
   // Second measurement: 1500mm
   validFrame[13] = 0xDC; validFrame[14] = 0x05; // 1500mm
+  updateFrameCRC(validFrame);
   mockSerial.mockIncomingData(validFrame, 23);
   sensor.update();
   
@@ -364,6 +387,34 @@ void testCommandSending() {
   testFramework.assertTrue(mockSerial.getSentDataLength() > 0, "Disable command sent data");
 }
 
+void testResetAndFactoryBehavior() {
+  Serial.println("Running Reset/Factory Tests...");
+  
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  mockSerial.resetMock();
+  
+  byte validFrame[23];
+  createValidFrame(validFrame);
+  mockSerial.mockIncomingData(validFrame, 23);
+  sensor.update(); // increment measurement count
+  
+  // Introduce an error to increment error count
+  byte invalidFrame[23];
+  createValidFrame(invalidFrame);
+  invalidFrame[0] = 0x00;
+  mockSerial.mockIncomingData(invalidFrame, 23);
+  sensor.update();
+  
+  sensor.resetState();
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(0, stats.measurementCount, "resetState clears measurement count");
+  testFramework.assertEqual(0, stats.errorCount, "resetState clears error count");
+  
+  DTSError result = sensor.factoryReset();
+  testFramework.assertEqual(static_cast<int>(DTSError::UNSUPPORTED_OPERATION), static_cast<int>(result), "factoryReset reports unsupported");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -378,6 +429,7 @@ void runAllTests() {
   testStatistics();
   testCalibration();
   testCommandSending();
+  testResetAndFactoryBehavior();
   
   testFramework.printSummary();
 }
@@ -394,3 +446,10 @@ void setup() {
 void loop() {
   // Tests run once in setup()
 }
+
+#ifndef ARDUINO
+int main() {
+  setup();
+  return 0;
+}
+#endif

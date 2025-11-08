@@ -73,8 +73,8 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate)
 
   // Verify serial port initialization
   if (!_serial) {
-    _lastError = DTSError::SERIAL_INIT_FAILED;
-    return DTSResult(_lastError);
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSResult(DTSError::SERIAL_INIT_FAILED);
   }
 
   // Reset state and buffers
@@ -85,7 +85,7 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate)
   // Send start stream command
   DTSError result = sendCommand(DTSCommand::START_STREAM, nullptr, 0);
   if (result != DTSError::NONE) {
-    _lastError = result;
+    recordError(result);
     return DTSResult(result);
   }
   
@@ -123,13 +123,15 @@ DTSResult DTS6012M_UART::update()
     newFrameReceived = true;
     _lastValidFrameTime = millis();
     _consecutiveErrors = 0;
+    _lastError = DTSError::NONE;
   } else if (result != DTSError::TIMEOUT) {
     _consecutiveErrors++;
+    recordError(result);
   }
   
   // Check for communication timeout
   if (isTimeout()) {
-    _lastError = DTSError::TIMEOUT;
+    recordError(DTSError::TIMEOUT);
     resetFrameState();
     return DTSResult(DTSError::TIMEOUT);
   }
@@ -282,8 +284,8 @@ DTSError DTS6012M_UART::configure(const DTSConfig &config)
     delay(10);
     
     if (!_serial) {
-      _lastError = DTSError::SERIAL_INIT_FAILED;
-      return _lastError;
+      recordError(DTSError::SERIAL_INIT_FAILED);
+      return DTSError::SERIAL_INIT_FAILED;
     }
   }
   
@@ -305,10 +307,8 @@ DTSResult DTS6012M_UART::disableSensor()
   return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
 }
 
-DTSError DTS6012M_UART::factoryReset()
+DTSError DTS6012M_UART::resetState()
 {
-  // Implementation would depend on sensor supporting factory reset command
-  // For now, just reset our internal state
   resetStatistics();
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
@@ -316,6 +316,13 @@ DTSError DTS6012M_UART::factoryReset()
   _consecutiveErrors = 0;
   
   return DTSError::NONE;
+}
+
+DTSError DTS6012M_UART::factoryReset()
+{
+  // Datasheet exposes no factory reset command. Provide a soft-reset and report unsupported.
+  resetState();
+  return DTSError::UNSUPPORTED_OPERATION;
 }
 
 // --- Data Analysis Methods ---
@@ -372,13 +379,13 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
 {
   // Validate parameters
   if (payloadLength > (DTS_MAX_COMMAND_FRAME_SIZE - 9)) {
-    _lastError = DTSError::INVALID_COMMAND;
-    return _lastError;
+    recordError(DTSError::INVALID_COMMAND);
+    return DTSError::INVALID_COMMAND;
   }
   
   if (!_serial) {
-    _lastError = DTSError::SERIAL_INIT_FAILED;
-    return _lastError;
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSError::SERIAL_INIT_FAILED;
   }
   
   int frameIndex = 0;
@@ -408,8 +415,8 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
   
   // Verify all bytes were sent
   if (bytesWritten != frameIndex) {
-    _lastError = DTSError::SERIAL_INIT_FAILED;
-    return _lastError;
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSError::SERIAL_INIT_FAILED;
   }
   
   return DTSError::NONE;
@@ -775,6 +782,7 @@ uint16_t DTS6012M_UART::applyCalibratedDistance(uint16_t rawDistance) const
 
 DTSError DTS6012M_UART::processCircularBuffer()
 {
+  DTSError lastError = DTSError::TIMEOUT;
   // Look for frame header in circular buffer
   while (_circularBufferTail != _circularBufferHead) {
     byte currentByte = _circularBuffer[_circularBufferTail];
@@ -800,14 +808,11 @@ DTSError DTS6012M_UART::processCircularBuffer()
             
             if (result == DTSError::NONE) {
               return DTSError::NONE;
-            } else {
-              _lastError = result;
-              // Continue looking for next frame
             }
+            lastError = result;
           }
         } else {
           // Buffer overflow - reset and try again
-          _lastError = DTSError::BUFFER_OVERFLOW;
           resetFrameState();
           return DTSError::BUFFER_OVERFLOW;
         }
@@ -820,7 +825,7 @@ DTSError DTS6012M_UART::processCircularBuffer()
     }
   }
   
-  return DTSError::TIMEOUT;
+  return lastError;
 }
 
 void DTS6012M_UART::resetFrameState()
@@ -832,4 +837,15 @@ void DTS6012M_UART::resetFrameState()
 bool DTS6012M_UART::isTimeout() const
 {
   return (millis() - _lastValidFrameTime) > _config.timeout_ms;
+}
+
+void DTS6012M_UART::recordError(DTSError error)
+{
+  if (error == DTSError::NONE)
+  {
+    return;
+  }
+
+  _lastError = error;
+  _statistics.errorCount++;
 }
