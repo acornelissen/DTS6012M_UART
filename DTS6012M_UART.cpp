@@ -156,9 +156,8 @@ bool DTS6012M_UART::parseFrame()
   if (_crcCheckEnabled)
   {
     // CRC is calculated over the frame *excluding* the last two CRC bytes themselves.
-    // The datasheet implies CRC LSB first, then MSB in the frame.
-    // So, _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2] is LSB, _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] is MSB.
-    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2] << 8) | _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1];
+    // Datasheet + captured frames show the CRC bytes are transmitted LSB first, so swap them when rebuilding the 16-bit value.
+    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
     uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
 
     if (calculatedCRC != receivedCRC)
