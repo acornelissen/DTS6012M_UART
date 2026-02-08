@@ -73,8 +73,24 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPi
 {
   // Use provided baud rate or config default
   unsigned long targetBaudRate = (baudRate == 0) ? _config.baudRate : baudRate;
-  
-  _serial.begin(targetBaudRate, SERIAL_8N1, rxPin, txPin);
+
+#if defined(DTS6012M_TEST_MODE)
+  (void)rxPin;
+  (void)txPin;
+  _serial.begin(targetBaudRate);
+#elif defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+  // ESP32 cores support passing RX/TX pins directly to HardwareSerial::begin.
+  if (rxPin >= 0 || txPin >= 0) {
+    _serial.begin(targetBaudRate, SERIAL_8N1, rxPin, txPin);
+  } else {
+    _serial.begin(targetBaudRate);
+  }
+#else
+  (void)rxPin;
+  (void)txPin;
+  _serial.begin(targetBaudRate);
+#endif
+
   delay(10); // Allow serial port to stabilize
 
   // Verify serial port initialization
