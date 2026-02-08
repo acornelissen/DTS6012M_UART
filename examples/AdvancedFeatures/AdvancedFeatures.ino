@@ -31,7 +31,7 @@ DTSConfig sensorConfig = {
   .minValidDistance_mm = 50,    // Minimum valid measurement  
   .minIntensityThreshold = 150, // Minimum signal strength for good measurements
   .crcByteOrder = DTSCRCByteOrder::AUTO,   // Auto-handle mixed CRC byte-order sensor variants
-  .crcAutoSwitchErrorThreshold = 200       // Switch order after repeated CRC failures
+  .crcAutoSwitchErrorThreshold = 100       // Switch order after repeated CRC failures
 };
 
 // Create sensor instance with custom configuration

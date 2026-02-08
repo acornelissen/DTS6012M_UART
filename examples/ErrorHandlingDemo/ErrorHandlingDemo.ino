@@ -26,7 +26,7 @@ DTSConfig robustConfig = {
   .minValidDistance_mm = 30,
   .minIntensityThreshold = 80,  // Lower threshold for marginal conditions
   .crcByteOrder = DTSCRCByteOrder::AUTO,  // Auto-handle CRC byte-order variants
-  .crcAutoSwitchErrorThreshold = 200      // Switch after repeated CRC failures
+  .crcAutoSwitchErrorThreshold = 100      // Switch after repeated CRC failures
 };
 
 DTS6012M_UART dtsSensor(SensorSerial, robustConfig);

@@ -105,7 +105,7 @@ void setup() {
   // Default is LSB_THEN_MSB.
   // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
   // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO); // starts with LSB_THEN_MSB
-  // dtsSensor.setCRCAutoSwitchErrorThreshold(200);    // switch after 200 consecutive CRC failures
+  // dtsSensor.setCRCAutoSwitchErrorThreshold(100);    // switch after 100 consecutive CRC failures
   
   // --- Optional: Control sensor enable/disable ---
   // dtsSensor.disableSensor(); // Stop measurements
@@ -152,7 +152,7 @@ struct DTSConfig {
   uint16_t minValidDistance_mm = 30;       // Minimum valid distance  
   uint16_t minIntensityThreshold = 100;    // Minimum signal strength
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::LSB_THEN_MSB; // CRC byte order mode
-  uint16_t crcAutoSwitchErrorThreshold = 200; // AUTO mode threshold
+  uint16_t crcAutoSwitchErrorThreshold = 100; // AUTO mode threshold
 };
 
 // Constructor with configuration
@@ -199,7 +199,7 @@ sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
 
 // Auto mode: starts with LSB_THEN_MSB and flips after threshold failures
 sensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
-sensor.setCRCAutoSwitchErrorThreshold(200);
+sensor.setCRCAutoSwitchErrorThreshold(100);
 
 // Inspect configured and currently active mode
 DTSCRCByteOrder configured = sensor.getCRCByteOrder();
@@ -328,7 +328,7 @@ sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
 
 // AUTO failover for mixed sensor populations
 sensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
-sensor.setCRCAutoSwitchErrorThreshold(200); // Switch after repeated CRC failures
+sensor.setCRCAutoSwitchErrorThreshold(100); // Switch after repeated CRC failures
 ```
 
 ### Legacy API Compatibility (main/v1)
@@ -409,7 +409,13 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.0.0 (Latest)
+### v2.1.1 (Latest)
+- 🔧 Reduced default `crcAutoSwitchErrorThreshold` from 200 to 100 for faster AUTO CRC byte-order failover
+
+### v2.1.0
+- 🚀 Version bump to supersede broken v2.0.0 package in registry
+
+### v2.0.0
 - ✨ **Major enhancement release**
 - 🛡️ Added comprehensive error handling and recovery
 - 📊 Added data quality assessment and validation

@@ -100,7 +100,7 @@ struct DTSConfig {
   uint16_t minValidDistance_mm = 30;
   uint16_t minIntensityThreshold = 100;
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
-  uint16_t crcAutoSwitchErrorThreshold = 200;
+  uint16_t crcAutoSwitchErrorThreshold = 100;
 };
 
 
