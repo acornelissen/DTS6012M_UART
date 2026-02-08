@@ -177,7 +177,7 @@ public:
    *   // v1.x style: if (sensor.begin()) { ... }
    *   // v2.0 style: if (sensor.begin() == DTSError::NONE) { ... }
    */
-  DTSResult begin(unsigned long baudRate = 0);
+  DTSResult begin(unsigned long baudRate = 0, int8_t rxPin = -1, int8_t txPin = -1);
 
   /**
    * @brief Process incoming data with enhanced frame synchronization

@@ -69,12 +69,12 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
  * @param baudRate The desired baud rate (0 = use config default)
  * @return DTSResult for backward compatibility (converts to bool or DTSError)
  */
-DTSResult DTS6012M_UART::begin(unsigned long baudRate)
+DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPin)
 {
   // Use provided baud rate or config default
   unsigned long targetBaudRate = (baudRate == 0) ? _config.baudRate : baudRate;
   
-  _serial.begin(targetBaudRate);
+  _serial.begin(targetBaudRate, SERIAL_8N1, rxPin, txPin);
   delay(10); // Allow serial port to stabilize
 
   // Verify serial port initialization
