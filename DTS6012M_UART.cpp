@@ -8,297 +8,527 @@
 #define pgm_read_word_near(addr) (*(const uint16_t *)(addr))
 #endif
 
+// Helper function to convert DTSCommand enum to byte
+static inline byte commandToByte(DTSCommand cmd) {
+  return static_cast<byte>(cmd);
+}
+
 /**
- * @brief Constructor for the DTS6012M_UART class.
- * @param serialPort A reference to the HardwareSerial port object (e.g., Serial1) to be used for communication.
+ * @brief Enhanced constructor with configuration support
+ * @param serialPort A reference to the HardwareSerial port object (e.g., Serial1)
+ * @param config Configuration structure with sensor parameters
  */
-DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort) : _serial(serialPort)
+DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config) 
+    : _serial(serialPort), _config(config)
 {
-  // Initialize private member variables
+  // Initialize enhanced member variables
   _rxBufferIndex = 0;
-  _distancePrimary_mm = 0xFFFF; // Initialize distance to invalid value
-  _intensityPrimary = 0;
-  _correctionPrimary = 0;
-  _distanceSecondary_mm = 0xFFFF; // Initialize distance to invalid value
-  _intensitySecondary = 0;
-  _correctionSecondary = 0;
-  _sunlightBase = 0;
-  _newDataAvailable = false;
+  _circularBufferHead = 0;
+  _circularBufferTail = 0;
   _lastUpdateTime = 0;
-  _crcCheckEnabled = true; // Enable CRC check by default
+  _lastValidFrameTime = 0;
+  _historyIndex = 0;
+  _lastError = DTSError::NONE;
+  _consecutiveErrors = 0;
+  _crcByteOrderMode = _config.crcByteOrder;
+  _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  _crcErrorStreak = 0;
+  _distanceOffset_mm = 0;
+  _distanceScale = 1.0f;
+  _frameState = FrameState::WAITING_FOR_HEADER;
+
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
+  
+  // Initialize current measurement with invalid values
+  _currentMeasurement = {
+    .primaryDistance_mm = DTS_INVALID_DISTANCE,
+    .primaryIntensity = DTS_INVALID_INTENSITY,
+    .primaryCorrection = 0,
+    .secondaryDistance_mm = DTS_INVALID_DISTANCE,
+    .secondaryIntensity = DTS_INVALID_INTENSITY,
+    .secondaryCorrection = 0,
+    .sunlightBase = 0,
+    .timestamp = 0,
+    .primaryQuality = DataQuality::INVALID,
+    .secondaryQuality = DataQuality::INVALID,
+    .lastError = DTSError::NONE
+  };
+  
+  // Initialize statistics
+  resetStatistics();
+  
+  // Initialize measurement history
+  for (int i = 0; i < DTS_HISTORY_BUFFER_SIZE; i++) {
+    _measurementHistory[i] = _currentMeasurement;
+  }
 }
 
 /**
- * @brief Initializes the serial communication and starts the sensor's data stream.
- * @param baudRate The desired baud rate for UART communication (default: 921600).
- * @return true if initialization was successful, false otherwise.
+ * @brief Enhanced initialization with detailed error reporting
+ * @param baudRate The desired baud rate (0 = use config default)
+ * @return DTSResult for backward compatibility (converts to bool or DTSError)
  */
-bool DTS6012M_UART::begin(unsigned long baudRate)
+DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPin)
 {
-  _serial.begin(baudRate);
-  delay(10); // Short delay to allow serial port to stabilize
+  // Use provided baud rate or config default
+  unsigned long targetBaudRate = (baudRate == 0) ? _config.baudRate : baudRate;
 
-  // Check if the hardware serial port started correctly
-  if (!_serial)
-  {
-    // Consider adding error logging if desired: Serial.println("Error: Sensor serial port failed to start.");
-    return false;
+#if defined(DTS6012M_TEST_MODE)
+  (void)rxPin;
+  (void)txPin;
+  _serial.begin(targetBaudRate);
+#elif defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+  // ESP32 cores support passing RX/TX pins directly to HardwareSerial::begin.
+  if (rxPin >= 0 || txPin >= 0) {
+    _serial.begin(targetBaudRate, SERIAL_8N1, rxPin, txPin);
+  } else {
+    _serial.begin(targetBaudRate);
+  }
+#else
+  (void)rxPin;
+  (void)txPin;
+  _serial.begin(targetBaudRate);
+#endif
+
+  delay(10); // Allow serial port to stabilize
+
+  // Verify serial port initialization
+  if (!_serial) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSResult(DTSError::SERIAL_INIT_FAILED);
   }
 
-  // Send the "Start Measurement Stream" command (0x01) to the sensor
-  sendCommand(DTS_CMD_START_STREAM, NULL, 0);
-  _lastUpdateTime = millis(); // Initialize timeout timer
-  return true;
+  // Reset state and buffers
+  resetFrameState();
+  resetCRCByteOrderState();
+  _lastUpdateTime = millis();
+  _lastValidFrameTime = millis();
+  
+  // Send start stream command
+  DTSError result = sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  if (result != DTSError::NONE) {
+    recordError(result);
+    return DTSResult(result);
+  }
+  
+  _lastError = DTSError::NONE;
+  return DTSResult(DTSError::NONE);
 }
 
 /**
- * @brief Processes incoming serial data from the sensor. Needs to be called repeatedly in the main loop.
- * @return true if a new, valid measurement frame was received and parsed during this call, false otherwise.
+ * @brief Enhanced update with improved frame synchronization and error handling
+ * @return DTSResult for backward compatibility (converts to bool or DTSError)
  */
-bool DTS6012M_UART::update()
+DTSResult DTS6012M_UART::update()
 {
-  bool frameReceivedAndParsed = false;
-  _newDataAvailable = false; // Reset the flag at the beginning of each update cycle
+  DTSError result = DTSError::NONE;
+  bool newFrameReceived = false;
 
-  // Process all available bytes in the serial buffer
-  while (_serial.available() > 0)
-  {
+  // Process all available bytes using circular buffer
+  while (_serial.available() > 0) {
     byte incomingByte = _serial.read();
-    _lastUpdateTime = millis(); // Update timestamp on receiving any byte
-
-    // --- Simple State Machine for Frame Parsing ---
-
-    // State 1: Waiting for Header Byte (0xA5)
-    if (_rxBufferIndex == 0)
-    {
-      if (incomingByte == DTS_HEADER)
-      {
-        _rxBuffer[_rxBufferIndex++] = incomingByte; // Store header and advance index
-      }
-      // If not header, ignore the byte and stay in state 1
+    _lastUpdateTime = millis();
+    
+    // Store in circular buffer
+    _circularBuffer[_circularBufferHead] = incomingByte;
+    _circularBufferHead = (_circularBufferHead + 1) % DTS_CIRCULAR_BUFFER_SIZE;
+    
+    // Prevent buffer overflow by advancing tail if needed
+    if (_circularBufferHead == _circularBufferTail) {
+      _circularBufferTail = (_circularBufferTail + 1) % DTS_CIRCULAR_BUFFER_SIZE;
     }
-    // State 2: Receiving Frame Content
-    else
-    {
-      // Store the byte if buffer is not full
-      if (_rxBufferIndex < DTS_RESPONSE_FRAME_LENGTH)
-      {
-        _rxBuffer[_rxBufferIndex++] = incomingByte;
-      }
-      else
-      {
-        // Buffer overflow condition - Should ideally not happen if FRAME_LENGTH is correct
-        // Reset buffer to recover
-        _rxBufferIndex = 0;
-        // Consider logging an error: Serial.println("Error: RX Buffer Overflow!");
-        continue; // Skip to next byte
-      }
-
-      // Check if the buffer is now full (received expected number of bytes)
-      if (_rxBufferIndex >= DTS_RESPONSE_FRAME_LENGTH)
-      {
-        // Attempt to parse the complete frame
-        if (parseFrame())
-        {
-          frameReceivedAndParsed = true; // Frame was valid
-          _newDataAvailable = true;      // Set flag
-        }
-        else
-        {
-          // Frame was invalid (bad header, length, or CRC)
-          // parseFrame already logged errors if debugging enabled
-        }
-        _rxBufferIndex = 0; // Reset buffer index to wait for the next frame's header
-        // If a valid frame was found, we can exit the update early
-        if (frameReceivedAndParsed)
-          return true;
-      }
-    } // End of State 2
-  } // End while (_serial.available())
-
-  if (millis() - _lastUpdateTime > 1000)
-  { // Example: 1 second timeout
-    // Serial.println("Warning: Sensor communication timeout?"); // Keep this commented unless debugging
-    _lastUpdateTime = millis(); // Reset timer to avoid continuous warnings
-    _rxBufferIndex = 0;         // Reset buffer state
   }
-
-  return frameReceivedAndParsed; // Return true only if a valid frame was processed in *this* call
+  
+  // Process circular buffer for complete frames
+  result = processCircularBuffer();
+  if (result == DTSError::NONE) {
+    newFrameReceived = true;
+    _lastValidFrameTime = millis();
+    _consecutiveErrors = 0;
+    _lastError = DTSError::NONE;
+  } else if (result != DTSError::TIMEOUT) {
+    _consecutiveErrors++;
+    recordError(result);
+  }
+  
+  // Check for communication timeout
+  if (isTimeout()) {
+    recordError(DTSError::TIMEOUT);
+    resetFrameState();
+    return DTSResult(DTSError::TIMEOUT);
+  }
+  
+  // Return success only if new frame was processed
+  return DTSResult(newFrameReceived ? DTSError::NONE : result);
 }
 
 /**
- * @brief Parses the data in the _rxBuffer. Validates header, length, and CRC. Extracts data if valid.
- * @return true if the frame is valid and data was extracted, false otherwise.
+ * @brief Enhanced frame parsing with detailed error reporting and data quality assessment
+ * @return DTSError::NONE if frame is valid, specific error code otherwise
  */
-bool DTS6012M_UART::parseFrame()
+DTSError DTS6012M_UART::parseFrame()
 {
-  // 1. Validate Header, Device Number, Device Type, and Command Code
-  //    We expect responses to the START_STREAM command (0x01)
-  if (_rxBuffer[0] != DTS_HEADER ||
-      _rxBuffer[1] != DTS_DEVICE_NO ||
+  // 1. Validate frame header structure
+  if (_rxBuffer[0] != DTS_HEADER) {
+    return DTSError::FRAME_HEADER_INVALID;
+  }
+  
+  if (_rxBuffer[1] != DTS_DEVICE_NO || 
       _rxBuffer[2] != DTS_DEVICE_TYPE ||
-      _rxBuffer[3] != DTS_CMD_START_STREAM)
-  {
-    // Serial.println("Debug: Frame header/ID/CMD mismatch"); // Optional Debugging
-    return false; // Invalid frame structure
+      _rxBuffer[3] != commandToByte(DTSCommand::START_STREAM)) {
+    return DTSError::FRAME_HEADER_INVALID;
   }
 
-  // 2. Validate Data Payload Length (Bytes 5 & 6, MSB first)
+  // 2. Validate data payload length (bytes 5 & 6, MSB first)
   uint16_t dataLength = ((uint16_t)_rxBuffer[5] << 8) | _rxBuffer[6];
-  if (dataLength != DTS_DATA_LENGTH_EXPECTED)
-  {
-    // Serial.print("Debug: Frame length mismatch. Expected: "); Serial.print(DTS_DATA_LENGTH_EXPECTED); // Optional Debugging
-    // Serial.print(" Got: "); Serial.println(dataLength); // Optional Debugging
-    return false; // Incorrect payload length
+  if (dataLength != DTS_DATA_LENGTH_EXPECTED) {
+    return DTSError::FRAME_LENGTH_INVALID;
   }
 
-  // 3. Validate CRC Checksum (if enabled)
-  if (_crcCheckEnabled)
-  {
-    // CRC is calculated over the frame *excluding* the last two CRC bytes themselves.
-    // Datasheet + captured frames show the CRC bytes are transmitted LSB first, so swap them when rebuilding the 16-bit value.
-    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
+  // 3. Validate CRC checksum (if enabled)
+  if (_config.crcEnabled) {
     uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
+    if (!validateFrameCRC(calculatedCRC)) {
+      return DTSError::CRC_CHECK_FAILED;
+    }
+  } else {
+    _crcErrorStreak = 0;
+  }
 
-    if (calculatedCRC != receivedCRC)
-    {
-      // Serial.print("Debug: CRC FAIL! Calc: 0x"); Serial.print(calculatedCRC, HEX); // Optional Debugging
-      // Serial.print(" Recv: 0x"); Serial.println(receivedCRC, HEX); // Optional Debugging
-      return false; // CRC check failed, data corrupted
+  // 4. Extract measurement data (LSB first format)
+  constexpr int dataPayloadOffset = 7;
+  
+  DTSMeasurement newMeasurement;
+  newMeasurement.secondaryDistance_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) | 
+                                        _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
+  newMeasurement.secondaryCorrection = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR + 1] << 8) | 
+                                       _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR];
+  newMeasurement.secondaryIntensity = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT + 1] << 8) | 
+                                      _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT];
+  
+  uint16_t rawPrimaryDistance = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST + 1] << 8) | 
+                                _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST];
+  newMeasurement.primaryDistance_mm = applyCalibratedDistance(rawPrimaryDistance);
+  
+  newMeasurement.primaryCorrection = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR + 1] << 8) | 
+                                     _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR];
+  newMeasurement.primaryIntensity = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT + 1] << 8) | 
+                                    _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT];
+  newMeasurement.sunlightBase = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE + 1] << 8) | 
+                                _rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE];
+  
+  // 5. Add metadata
+  newMeasurement.timestamp = millis();
+  newMeasurement.primaryQuality = assessDataQuality(newMeasurement);
+  newMeasurement.secondaryQuality = assessDataQuality(newMeasurement); // Could be enhanced for secondary-specific logic
+  newMeasurement.lastError = DTSError::NONE;
+  
+  // 6. Store measurement and update statistics
+  _currentMeasurement = newMeasurement;
+  
+  // Store in history buffer
+  _measurementHistory[_historyIndex] = newMeasurement;
+  _historyIndex = (_historyIndex + 1) % DTS_HISTORY_BUFFER_SIZE;
+  
+  // Update statistics
+  updateStatistics(newMeasurement);
+  
+  return DTSError::NONE;
+}
+
+// --- Enhanced Data Access Methods ---
+
+DTSMeasurement DTS6012M_UART::getMeasurement() const
+{
+  return _currentMeasurement;
+}
+
+uint16_t DTS6012M_UART::getDistance() const
+{
+  return _currentMeasurement.primaryDistance_mm;
+}
+
+uint16_t DTS6012M_UART::getIntensity() const
+{
+  return _currentMeasurement.primaryIntensity;
+}
+
+bool DTS6012M_UART::isDataValid() const
+{
+  return (_currentMeasurement.primaryQuality != DataQuality::INVALID &&
+          _currentMeasurement.primaryDistance_mm != DTS_INVALID_DISTANCE &&
+          _currentMeasurement.primaryIntensity >= _config.minIntensityThreshold);
+}
+
+DataQuality DTS6012M_UART::getDataQuality() const
+{
+  return _currentMeasurement.primaryQuality;
+}
+
+// Legacy getters for backward compatibility
+uint16_t DTS6012M_UART::getSunlightBase() const
+{
+  return _currentMeasurement.sunlightBase;
+}
+
+uint16_t DTS6012M_UART::getCorrection() const
+{
+  return _currentMeasurement.primaryCorrection;
+}
+
+uint16_t DTS6012M_UART::getSecondaryDistance() const
+{
+  return _currentMeasurement.secondaryDistance_mm;
+}
+
+uint16_t DTS6012M_UART::getSecondaryIntensity() const
+{
+  return _currentMeasurement.secondaryIntensity;
+}
+
+uint16_t DTS6012M_UART::getSecondaryCorrection() const
+{
+  return _currentMeasurement.secondaryCorrection;
+}
+
+// --- Enhanced Control Methods ---
+
+DTSError DTS6012M_UART::configure(const DTSConfig &config)
+{
+  _config = config;
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
+  
+  // Reinitialize serial if baud rate changed
+  if (_serial) {
+    _serial.end();
+    _serial.begin(_config.baudRate);
+    delay(10);
+    
+    if (!_serial) {
+      recordError(DTSError::SERIAL_INIT_FAILED);
+      return DTSError::SERIAL_INIT_FAILED;
     }
   }
-
-  // --- If all checks pass, extract the data ---
-  // Data payload starts at index 7 of the full frame buffer.
-  const int dataPayloadOffset = 7;
-
-  // Extract values (remembering datasheet specifies LSB first for data fields)
-  _distanceSecondary_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
-  _correctionSecondary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR];
-  _intensitySecondary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT];
-  _distancePrimary_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_DIST];
-  _correctionPrimary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_CORR];
-  _intensityPrimary = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_PRI_INT];
-  _sunlightBase = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE + 1] << 8) | _rxBuffer[dataPayloadOffset + DTS_IDX_SUN_BASE];
-
-  return true; // Frame successfully parsed and data extracted
+  
+  return DTSError::NONE;
 }
 
-// --- Data Getter Methods ---
-
-uint16_t DTS6012M_UART::getDistance()
-{
-  return _distancePrimary_mm;
-}
-
-uint16_t DTS6012M_UART::getIntensity()
-{
-  return _intensityPrimary;
-}
-
-uint16_t DTS6012M_UART::getSunlightBase()
-{
-  return _sunlightBase;
-}
-
-uint16_t DTS6012M_UART::getCorrection()
-{
-  return _correctionPrimary;
-}
-
-uint16_t DTS6012M_UART::getSecondaryDistance()
-{
-  return _distanceSecondary_mm;
-}
-
-uint16_t DTS6012M_UART::getSecondaryIntensity()
-{
-  return _intensitySecondary;
-}
-
-uint16_t DTS6012M_UART::getSecondaryCorrection()
-{
-  return _correctionSecondary;
-}
-
-/**
- * @brief Enables or disables the CRC check for incoming frames.
- * @param enable Set to true to enable CRC validation (default), false to disable.
- * Disabling improves performance but increases the risk of accepting corrupted data.
- */
 void DTS6012M_UART::enableCRC(bool enable)
 {
-  _crcCheckEnabled = enable;
+  _config.crcEnabled = enable;
+  _crcErrorStreak = 0;
 }
 
-/**
- * @brief Enables the sensor by sending the START_STREAM command.
- * This starts the continuous measurement stream from the sensor.
- */
-void DTS6012M_UART::enableSensor()
+void DTS6012M_UART::setCRCByteOrder(DTSCRCByteOrder mode)
 {
-  sendCommand(DTS_CMD_START_STREAM, NULL, 0);
+  _config.crcByteOrder = mode;
+  _crcByteOrderMode = mode;
+
+  if (_crcByteOrderMode == DTSCRCByteOrder::MSB_THEN_LSB) {
+    _activeCRCByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
+  } else {
+    // AUTO starts from LSB_THEN_MSB for backward compatibility.
+    _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  }
+
+  _crcErrorStreak = 0;
 }
 
-/**
- * @brief Disables the sensor by sending the STOP_STREAM command.
- * This stops the continuous measurement stream from the sensor.
- */
-void DTS6012M_UART::disableSensor()
+DTSCRCByteOrder DTS6012M_UART::getCRCByteOrder() const
 {
-  sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+  return _crcByteOrderMode;
+}
+
+DTSCRCByteOrder DTS6012M_UART::getActiveCRCByteOrder() const
+{
+  return _activeCRCByteOrder;
+}
+
+void DTS6012M_UART::setCRCAutoSwitchErrorThreshold(uint16_t threshold)
+{
+  _config.crcAutoSwitchErrorThreshold = (threshold == 0) ? 1 : threshold;
+}
+
+uint16_t DTS6012M_UART::getCRCAutoSwitchErrorThreshold() const
+{
+  return _config.crcAutoSwitchErrorThreshold;
+}
+
+DTSResult DTS6012M_UART::enableSensor()
+{
+  return DTSResult(sendCommand(DTSCommand::START_STREAM, nullptr, 0));
+}
+
+DTSResult DTS6012M_UART::disableSensor()
+{
+  return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
+}
+
+DTSError DTS6012M_UART::resetState()
+{
+  resetStatistics();
+  _distanceOffset_mm = 0;
+  _distanceScale = 1.0f;
+  _lastError = DTSError::NONE;
+  _consecutiveErrors = 0;
+  resetCRCByteOrderState();
+  
+  return DTSError::NONE;
+}
+
+DTSError DTS6012M_UART::factoryReset()
+{
+  // Datasheet exposes no factory reset command. Provide a soft-reset and report unsupported.
+  resetState();
+  return DTSError::UNSUPPORTED_OPERATION;
+}
+
+// --- Data Analysis Methods ---
+
+DTSStatistics DTS6012M_UART::getStatistics() const
+{
+  return _statistics;
+}
+
+void DTS6012M_UART::resetStatistics()
+{
+  _statistics = {
+    .minDistance = 65535,
+    .maxDistance = 0,
+    .avgDistance = 0,
+    .measurementCount = 0,
+    .errorCount = 0
+  };
+}
+
+DTSError DTS6012M_UART::getLastError() const
+{
+  return _lastError;
+}
+
+void DTS6012M_UART::clearError()
+{
+  _lastError = DTSError::NONE;
+  _consecutiveErrors = 0;
+  _crcErrorStreak = 0;
+}
+
+// --- Calibration Methods ---
+
+void DTS6012M_UART::setDistanceOffset(int16_t offset_mm)
+{
+  _distanceOffset_mm = offset_mm;
+}
+
+void DTS6012M_UART::setDistanceScale(float scale_factor)
+{
+  if (scale_factor > 0.0f) {
+    _distanceScale = scale_factor;
+  }
 }
 
 /**
- * @brief Sends a command frame to the sensor.
- * @param cmd The command byte code (e.g., DTS_CMD_STOP_STREAM).
- * @param dataPayload Pointer to the data bytes to include in the frame (NULL if none).
- * @param payloadLength The number of bytes in dataPayload.
+ * @brief Enhanced command sending with error handling and pre-allocation
+ * @param cmd Command from DTSCommand enum
+ * @param dataPayload Optional data payload
+ * @param payloadLength Size of payload in bytes
+ * @return DTSError::NONE on success, error code on failure
  */
+DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uint16_t payloadLength)
+{
+  // Validate parameters
+  if (payloadLength > (DTS_MAX_COMMAND_FRAME_SIZE - 9)) {
+    recordError(DTSError::INVALID_COMMAND);
+    return DTSError::INVALID_COMMAND;
+  }
+  
+  if (!_serial) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSError::SERIAL_INIT_FAILED;
+  }
+  
+  int frameIndex = 0;
+  
+  // 1. Build frame header using pre-allocated buffer
+  _commandFrame[frameIndex++] = DTS_HEADER;
+  _commandFrame[frameIndex++] = DTS_DEVICE_NO;
+  _commandFrame[frameIndex++] = DTS_DEVICE_TYPE;
+  _commandFrame[frameIndex++] = commandToByte(cmd);
+  _commandFrame[frameIndex++] = 0x00; // Reserved byte
+  _commandFrame[frameIndex++] = (payloadLength >> 8) & 0xFF; // Length MSB
+  _commandFrame[frameIndex++] = payloadLength & 0xFF; // Length LSB
+
+  // 2. Add data payload if provided
+  if (dataPayload != nullptr && payloadLength > 0) {
+    memcpy(&_commandFrame[frameIndex], dataPayload, payloadLength);
+    frameIndex += payloadLength;
+  }
+
+  // 3. Calculate and append CRC16
+  uint16_t crc = calculateCRC16(_commandFrame, frameIndex);
+  appendCommandCRC(_commandFrame, frameIndex, crc);
+
+  // 4. Send frame
+  size_t bytesWritten = _serial.write(_commandFrame, frameIndex);
+  
+  // Verify all bytes were sent
+  if (bytesWritten != frameIndex) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return DTSError::SERIAL_INIT_FAILED;
+  }
+  
+  return DTSError::NONE;
+}
+
 void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payloadLength)
 {
-  // Calculate required frame size: Fixed parts (7) + payload + CRC (2)
-  int frameSize = 9 + payloadLength;
-  byte frame[frameSize]; // Consider dynamic allocation or a max-size buffer if payloadLength can be very large
-  int frameIndex = 0;
+  // Preserve main/v1 behavior for larger payloads that exceed the pre-allocated frame buffer.
+  if (payloadLength <= (DTS_MAX_COMMAND_FRAME_SIZE - 9)) {
+    (void)sendCommand(static_cast<DTSCommand>(cmd), dataPayload, payloadLength);
+    return;
+  }
 
-  // 1. Build Frame Header & Info
+  if (!_serial) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return;
+  }
+
+  const size_t frameSize = static_cast<size_t>(9u + payloadLength);
+  byte *frame = static_cast<byte *>(malloc(frameSize));
+  if (frame == nullptr) {
+    recordError(DTSError::INVALID_COMMAND);
+    return;
+  }
+
+  int frameIndex = 0;
   frame[frameIndex++] = DTS_HEADER;
   frame[frameIndex++] = DTS_DEVICE_NO;
   frame[frameIndex++] = DTS_DEVICE_TYPE;
   frame[frameIndex++] = cmd;
-  frame[frameIndex++] = 0x00;                        // Reserved byte (usually 0x00)
-  frame[frameIndex++] = (payloadLength >> 8) & 0xFF; // Length MSB
-  frame[frameIndex++] = payloadLength & 0xFF;        // Length LSB
+  frame[frameIndex++] = 0x00;
+  frame[frameIndex++] = (payloadLength >> 8) & 0xFF;
+  frame[frameIndex++] = payloadLength & 0xFF;
 
-  // 2. Add Data Payload (if provided)
-  if (dataPayload != NULL && payloadLength > 0)
-  {
+  if (dataPayload != nullptr && payloadLength > 0) {
     memcpy(&frame[frameIndex], dataPayload, payloadLength);
     frameIndex += payloadLength;
   }
 
-  // 3. Calculate CRC16 on the frame constructed so far (Header to end of Data)
   uint16_t crc = calculateCRC16(frame, frameIndex);
-
-  // 4. Append CRC16 (LSB first, as per Modbus standard with RefOut=true)
-  // The datasheet page 7 describes "CRC-16 校验采用modbus 的校验方式...输出数据反转:是"
-  // This typically means the CRC itself is transmitted LSB first.
-  frame[frameIndex++] = crc & 0xFF;        // CRC LSB
-  frame[frameIndex++] = (crc >> 8) & 0xFF; // CRC MSB
-
-  // 5. Send the complete frame over the serial port
+  appendCommandCRC(frame, frameIndex, crc);
   _serial.write(frame, frameIndex);
-  // _serial.flush(); // Optional: Wait for transmission to complete. Generally not needed and can block.
+  free(frame);
 }
 
 /**
- * @brief Calculates the Modbus CRC-16 checksum using a lookup table for speed.
- * @param data Pointer to the byte array.
- * @param len The number of bytes in the array to checksum.
- * @return The calculated 16-bit CRC value.
+ * @brief Optimized CRC-16 calculation with lookup table
+ * @param data Pointer to the byte array
+ * @param len The number of bytes in the array to checksum
+ * @return The calculated 16-bit CRC value
  */
-uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len)
+uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
 {
   // CRC-16/MODBUS Lookup Table
   // Polynomial: 0x8005 (becomes 0xA001 when reflected for LSB-first processing)
@@ -579,4 +809,201 @@ uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len)
 #endif
   }
   return crc; // No final XOR for standard Modbus CRC
+}
+
+// --- Enhanced Private Helper Methods ---
+
+DataQuality DTS6012M_UART::assessDataQuality(const DTSMeasurement &measurement) const
+{
+  // Invalid distance check
+  if (measurement.primaryDistance_mm == DTS_INVALID_DISTANCE) {
+    return DataQuality::INVALID;
+  }
+  
+  // Range validation
+  if (measurement.primaryDistance_mm < _config.minValidDistance_mm ||
+      measurement.primaryDistance_mm > _config.maxValidDistance_mm) {
+    return DataQuality::POOR;
+  }
+  
+  // Intensity-based quality assessment
+  if (measurement.primaryIntensity < _config.minIntensityThreshold) {
+    return DataQuality::POOR;
+  } else if (measurement.primaryIntensity < (_config.minIntensityThreshold * 2)) {
+    return DataQuality::FAIR;
+  } else if (measurement.primaryIntensity < (_config.minIntensityThreshold * 4)) {
+    return DataQuality::GOOD;
+  } else {
+    return DataQuality::EXCELLENT;
+  }
+}
+
+void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
+{
+  if (measurement.primaryDistance_mm != DTS_INVALID_DISTANCE) {
+    _statistics.measurementCount++;
+    
+    // Update min/max
+    if (measurement.primaryDistance_mm < _statistics.minDistance) {
+      _statistics.minDistance = measurement.primaryDistance_mm;
+    }
+    if (measurement.primaryDistance_mm > _statistics.maxDistance) {
+      _statistics.maxDistance = measurement.primaryDistance_mm;
+    }
+    
+    // Update running average
+    _statistics.avgDistance = ((_statistics.avgDistance * (_statistics.measurementCount - 1)) + 
+                              measurement.primaryDistance_mm) / _statistics.measurementCount;
+  }
+  
+  if (measurement.lastError != DTSError::NONE) {
+    _statistics.errorCount++;
+  }
+}
+
+uint16_t DTS6012M_UART::applyCalibratedDistance(uint16_t rawDistance) const
+{
+  if (rawDistance == DTS_INVALID_DISTANCE) {
+    return DTS_INVALID_DISTANCE;
+  }
+  
+  // Apply scaling and offset
+  float calibratedDistance = (rawDistance * _distanceScale) + _distanceOffset_mm;
+  
+  // Clamp to valid range
+  if (calibratedDistance < 0) {
+    return 0;
+  } else if (calibratedDistance > 65534) {
+    return 65534;
+  } else {
+    return static_cast<uint16_t>(calibratedDistance);
+  }
+}
+
+DTSError DTS6012M_UART::processCircularBuffer()
+{
+  DTSError lastError = DTSError::TIMEOUT;
+  // Look for frame header in circular buffer
+  while (_circularBufferTail != _circularBufferHead) {
+    byte currentByte = _circularBuffer[_circularBufferTail];
+    _circularBufferTail = (_circularBufferTail + 1) % DTS_CIRCULAR_BUFFER_SIZE;
+    
+    switch (_frameState) {
+      case FrameState::WAITING_FOR_HEADER:
+        if (currentByte == DTS_HEADER) {
+          _rxBuffer[0] = currentByte;
+          _rxBufferIndex = 1;
+          _frameState = FrameState::RECEIVING_FRAME;
+        }
+        break;
+        
+      case FrameState::RECEIVING_FRAME:
+        if (_rxBufferIndex < DTS_RESPONSE_FRAME_LENGTH) {
+          _rxBuffer[_rxBufferIndex++] = currentByte;
+          
+          if (_rxBufferIndex >= DTS_RESPONSE_FRAME_LENGTH) {
+            _frameState = FrameState::FRAME_COMPLETE;
+            DTSError result = parseFrame();
+            resetFrameState();
+            
+            if (result == DTSError::NONE) {
+              return DTSError::NONE;
+            }
+            lastError = result;
+          }
+        } else {
+          // Buffer overflow - reset and try again
+          resetFrameState();
+          return DTSError::BUFFER_OVERFLOW;
+        }
+        break;
+        
+      case FrameState::FRAME_COMPLETE:
+        // Should not reach here
+        resetFrameState();
+        break;
+    }
+  }
+  
+  return lastError;
+}
+
+void DTS6012M_UART::resetFrameState()
+{
+  _frameState = FrameState::WAITING_FOR_HEADER;
+  _rxBufferIndex = 0;
+}
+
+bool DTS6012M_UART::isTimeout() const
+{
+  return (millis() - _lastValidFrameTime) > _config.timeout_ms;
+}
+
+void DTS6012M_UART::recordError(DTSError error)
+{
+  if (error == DTSError::NONE)
+  {
+    return;
+  }
+
+  _lastError = error;
+  _statistics.errorCount++;
+}
+
+bool DTS6012M_UART::validateFrameCRC(uint16_t calculatedCRC)
+{
+  uint16_t receivedCRC = extractFrameCRC(_activeCRCByteOrder);
+  if (calculatedCRC == receivedCRC) {
+    _crcErrorStreak = 0;
+    return true;
+  }
+
+  if (_crcByteOrderMode == DTSCRCByteOrder::AUTO) {
+    _crcErrorStreak++;
+    if (_crcErrorStreak >= _config.crcAutoSwitchErrorThreshold) {
+      _activeCRCByteOrder = (_activeCRCByteOrder == DTSCRCByteOrder::LSB_THEN_MSB)
+                                ? DTSCRCByteOrder::MSB_THEN_LSB
+                                : DTSCRCByteOrder::LSB_THEN_MSB;
+      _crcErrorStreak = 0;
+
+      // Retry current frame with the alternate ordering immediately.
+      receivedCRC = extractFrameCRC(_activeCRCByteOrder);
+      if (calculatedCRC == receivedCRC) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+uint16_t DTS6012M_UART::extractFrameCRC(DTSCRCByteOrder order) const
+{
+  const int crcLsbIndex = DTS_RESPONSE_FRAME_LENGTH - 2;
+  const int crcMsbIndex = DTS_RESPONSE_FRAME_LENGTH - 1;
+
+  if (order == DTSCRCByteOrder::MSB_THEN_LSB) {
+    return ((uint16_t)_rxBuffer[crcLsbIndex] << 8) | _rxBuffer[crcMsbIndex];
+  }
+
+  // Default and AUTO fallback: LSB then MSB on wire.
+  return ((uint16_t)_rxBuffer[crcMsbIndex] << 8) | _rxBuffer[crcLsbIndex];
+}
+
+void DTS6012M_UART::appendCommandCRC(byte *buffer, int &index, uint16_t crc) const
+{
+  if (_activeCRCByteOrder == DTSCRCByteOrder::MSB_THEN_LSB) {
+    buffer[index++] = (crc >> 8) & 0xFF; // CRC MSB
+    buffer[index++] = crc & 0xFF;        // CRC LSB
+    return;
+  }
+
+  buffer[index++] = crc & 0xFF;         // CRC LSB
+  buffer[index++] = (crc >> 8) & 0xFF;  // CRC MSB
+}
+
+void DTS6012M_UART::resetCRCByteOrderState()
+{
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
 }

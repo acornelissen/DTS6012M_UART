@@ -47,6 +47,15 @@ void setup() {
       delay(100);
     }
   }
+
+  // Optional: Set CRC byte order for specific sensor variants.
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
+
+  // Optional: legacy main/v1 command API is still supported.
+  // dtsSensor.sendCommand(DTS_CMD_START_STREAM, NULL, 0);
+  // dtsSensor.sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+
   Serial.println("-------------------------------------");
 }
 
