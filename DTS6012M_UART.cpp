@@ -30,9 +30,15 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
   _historyIndex = 0;
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
+  _crcByteOrderMode = _config.crcByteOrder;
+  _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  _crcErrorStreak = 0;
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
   _frameState = FrameState::WAITING_FOR_HEADER;
+
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
   
   // Initialize current measurement with invalid values
   _currentMeasurement = {
@@ -79,6 +85,7 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate)
 
   // Reset state and buffers
   resetFrameState();
+  resetCRCByteOrderState();
   _lastUpdateTime = millis();
   _lastValidFrameTime = millis();
   
@@ -165,14 +172,12 @@ DTSError DTS6012M_UART::parseFrame()
 
   // 3. Validate CRC checksum (if enabled)
   if (_config.crcEnabled) {
-    // Sensor transmits CRC bytes LSB first, so reconstruct by reading the final byte as MSB.
-    uint16_t receivedCRC = ((uint16_t)_rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 1] << 8) | 
-                           _rxBuffer[DTS_RESPONSE_FRAME_LENGTH - 2];
     uint16_t calculatedCRC = calculateCRC16(_rxBuffer, DTS_RESPONSE_FRAME_LENGTH - 2);
-
-    if (calculatedCRC != receivedCRC) {
+    if (!validateFrameCRC(calculatedCRC)) {
       return DTSError::CRC_CHECK_FAILED;
     }
+  } else {
+    _crcErrorStreak = 0;
   }
 
   // 4. Extract measurement data (LSB first format)
@@ -276,6 +281,8 @@ uint16_t DTS6012M_UART::getSecondaryCorrection() const
 DTSError DTS6012M_UART::configure(const DTSConfig &config)
 {
   _config = config;
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
   
   // Reinitialize serial if baud rate changed
   if (_serial) {
@@ -295,6 +302,42 @@ DTSError DTS6012M_UART::configure(const DTSConfig &config)
 void DTS6012M_UART::enableCRC(bool enable)
 {
   _config.crcEnabled = enable;
+  _crcErrorStreak = 0;
+}
+
+void DTS6012M_UART::setCRCByteOrder(DTSCRCByteOrder mode)
+{
+  _config.crcByteOrder = mode;
+  _crcByteOrderMode = mode;
+
+  if (_crcByteOrderMode == DTSCRCByteOrder::MSB_THEN_LSB) {
+    _activeCRCByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
+  } else {
+    // AUTO starts from LSB_THEN_MSB for backward compatibility.
+    _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  }
+
+  _crcErrorStreak = 0;
+}
+
+DTSCRCByteOrder DTS6012M_UART::getCRCByteOrder() const
+{
+  return _crcByteOrderMode;
+}
+
+DTSCRCByteOrder DTS6012M_UART::getActiveCRCByteOrder() const
+{
+  return _activeCRCByteOrder;
+}
+
+void DTS6012M_UART::setCRCAutoSwitchErrorThreshold(uint16_t threshold)
+{
+  _config.crcAutoSwitchErrorThreshold = (threshold == 0) ? 1 : threshold;
+}
+
+uint16_t DTS6012M_UART::getCRCAutoSwitchErrorThreshold() const
+{
+  return _config.crcAutoSwitchErrorThreshold;
 }
 
 DTSResult DTS6012M_UART::enableSensor()
@@ -314,6 +357,7 @@ DTSError DTS6012M_UART::resetState()
   _distanceScale = 1.0f;
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
+  resetCRCByteOrderState();
   
   return DTSError::NONE;
 }
@@ -352,6 +396,7 @@ void DTS6012M_UART::clearError()
 {
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
+  _crcErrorStreak = 0;
 }
 
 // --- Calibration Methods ---
@@ -407,8 +452,7 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
 
   // 3. Calculate and append CRC16
   uint16_t crc = calculateCRC16(_commandFrame, frameIndex);
-  _commandFrame[frameIndex++] = crc & 0xFF; // CRC LSB
-  _commandFrame[frameIndex++] = (crc >> 8) & 0xFF; // CRC MSB
+  appendCommandCRC(_commandFrame, frameIndex, crc);
 
   // 4. Send frame
   size_t bytesWritten = _serial.write(_commandFrame, frameIndex);
@@ -848,4 +892,62 @@ void DTS6012M_UART::recordError(DTSError error)
 
   _lastError = error;
   _statistics.errorCount++;
+}
+
+bool DTS6012M_UART::validateFrameCRC(uint16_t calculatedCRC)
+{
+  uint16_t receivedCRC = extractFrameCRC(_activeCRCByteOrder);
+  if (calculatedCRC == receivedCRC) {
+    _crcErrorStreak = 0;
+    return true;
+  }
+
+  if (_crcByteOrderMode == DTSCRCByteOrder::AUTO) {
+    _crcErrorStreak++;
+    if (_crcErrorStreak >= _config.crcAutoSwitchErrorThreshold) {
+      _activeCRCByteOrder = (_activeCRCByteOrder == DTSCRCByteOrder::LSB_THEN_MSB)
+                                ? DTSCRCByteOrder::MSB_THEN_LSB
+                                : DTSCRCByteOrder::LSB_THEN_MSB;
+      _crcErrorStreak = 0;
+
+      // Retry current frame with the alternate ordering immediately.
+      receivedCRC = extractFrameCRC(_activeCRCByteOrder);
+      if (calculatedCRC == receivedCRC) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+uint16_t DTS6012M_UART::extractFrameCRC(DTSCRCByteOrder order) const
+{
+  const int crcLsbIndex = DTS_RESPONSE_FRAME_LENGTH - 2;
+  const int crcMsbIndex = DTS_RESPONSE_FRAME_LENGTH - 1;
+
+  if (order == DTSCRCByteOrder::MSB_THEN_LSB) {
+    return ((uint16_t)_rxBuffer[crcLsbIndex] << 8) | _rxBuffer[crcMsbIndex];
+  }
+
+  // Default and AUTO fallback: LSB then MSB on wire.
+  return ((uint16_t)_rxBuffer[crcMsbIndex] << 8) | _rxBuffer[crcLsbIndex];
+}
+
+void DTS6012M_UART::appendCommandCRC(byte *buffer, int &index, uint16_t crc) const
+{
+  if (_activeCRCByteOrder == DTSCRCByteOrder::MSB_THEN_LSB) {
+    buffer[index++] = (crc >> 8) & 0xFF; // CRC MSB
+    buffer[index++] = crc & 0xFF;        // CRC LSB
+    return;
+  }
+
+  buffer[index++] = crc & 0xFF;         // CRC LSB
+  buffer[index++] = (crc >> 8) & 0xFF;  // CRC MSB
+}
+
+void DTS6012M_UART::resetCRCByteOrderState()
+{
+  setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
+  setCRCByteOrder(_config.crcByteOrder);
 }

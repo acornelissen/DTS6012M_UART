@@ -39,6 +39,11 @@ void setup() {
     Serial.println("Check wiring and connections.");
     while (1) delay(100);
   }
+
+  // Optional: Select CRC byte order for sensor variants.
+  // Default is LSB_THEN_MSB.
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
   
   Serial.println("Starting measurements...");
   Serial.println("Format: Distance (mm) | Intensity");

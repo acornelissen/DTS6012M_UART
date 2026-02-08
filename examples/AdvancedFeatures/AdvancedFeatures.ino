@@ -11,6 +11,7 @@
  * - Statistics tracking
  * - Calibration
  * - Performance optimization options
+ * - CRC byte-order configuration and AUTO failover
  * 
  * Hardware Connections:
  * - Arduino GND <-> Sensor Pin 6 (GND)
@@ -28,7 +29,9 @@ DTSConfig sensorConfig = {
   .crcEnabled = true,           // Enable CRC for data integrity (can disable for speed)
   .maxValidDistance_mm = 18000, // Maximum expected measurement range
   .minValidDistance_mm = 50,    // Minimum valid measurement  
-  .minIntensityThreshold = 150  // Minimum signal strength for good measurements
+  .minIntensityThreshold = 150, // Minimum signal strength for good measurements
+  .crcByteOrder = DTSCRCByteOrder::AUTO,   // Auto-handle mixed CRC byte-order sensor variants
+  .crcAutoSwitchErrorThreshold = 200       // Switch order after repeated CRC failures
 };
 
 // Create sensor instance with custom configuration
@@ -76,6 +79,10 @@ void setup() {
   // Optional: Disable CRC for maximum speed (use with caution)
   // dtsSensor.enableCRC(false);
   // Serial.println("CRC disabled for maximum performance");
+
+  // Optional: Force a fixed CRC order if your hardware is known.
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
   
   Serial.println("Starting measurements...");
   Serial.println("Format: Distance | Intensity | Quality | Error | Stats");
@@ -233,7 +240,7 @@ void handleSensorError(DTSError error) {
       break;
       
     case DTSError::CRC_CHECK_FAILED:
-      Serial.println("Solution: Check for electrical interference or try disabling CRC");
+      Serial.println("Solution: Check interference and CRC byte order (or use AUTO mode)");
       break;
       
     case DTSError::FRAME_HEADER_INVALID:

@@ -73,6 +73,13 @@ enum class DataQuality : byte {
   INVALID = 4
 };
 
+// CRC byte ordering options for the 2-byte CRC field
+enum class DTSCRCByteOrder : byte {
+  LSB_THEN_MSB = 0,
+  MSB_THEN_LSB = 1,
+  AUTO = 2
+};
+
 // Sensor configuration structure
 struct DTSConfig {
   unsigned long baudRate = 921600;
@@ -81,6 +88,8 @@ struct DTSConfig {
   uint16_t maxValidDistance_mm = 20000;
   uint16_t minValidDistance_mm = 30;
   uint16_t minIntensityThreshold = 100;
+  DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  uint16_t crcAutoSwitchErrorThreshold = 200;
 };
 
 
@@ -241,6 +250,34 @@ public:
   void enableCRC(bool enable);
 
   /**
+   * @brief Set CRC byte-order mode used for validation and command transmission.
+   * AUTO starts in LSB_THEN_MSB mode and switches after repeated CRC failures.
+   */
+  void setCRCByteOrder(DTSCRCByteOrder mode);
+
+  /**
+   * @brief Get configured CRC byte-order mode.
+   */
+  DTSCRCByteOrder getCRCByteOrder() const;
+
+  /**
+   * @brief Get active CRC byte-order currently used on the wire.
+   * In AUTO mode this can differ from getCRCByteOrder().
+   */
+  DTSCRCByteOrder getActiveCRCByteOrder() const;
+
+  /**
+   * @brief Set consecutive CRC error threshold used by AUTO mode before switching order.
+   * @param threshold Minimum 1. Lower values switch faster.
+   */
+  void setCRCAutoSwitchErrorThreshold(uint16_t threshold);
+
+  /**
+   * @brief Get AUTO mode consecutive CRC error threshold.
+   */
+  uint16_t getCRCAutoSwitchErrorThreshold() const;
+
+  /**
    * @brief Start measurement stream
    * @return DTSResult that converts to bool (v1.x) or DTSError (v2.0)
    */
@@ -329,6 +366,9 @@ private:
   DTSStatistics _statistics;
   DTSError _lastError;
   uint16_t _consecutiveErrors;
+  DTSCRCByteOrder _crcByteOrderMode;
+  DTSCRCByteOrder _activeCRCByteOrder;
+  uint16_t _crcErrorStreak;
   
   // Calibration parameters
   int16_t _distanceOffset_mm;
@@ -399,6 +439,28 @@ private:
    * @brief Record an error for diagnostics/statistics.
    */
   void recordError(DTSError error);
+
+  /**
+   * @brief Validate CRC field according to active byte order and AUTO policy.
+   * @param calculatedCRC Locally computed CRC over frame payload
+   * @return true if CRC is valid (possibly after AUTO switch/retry)
+   */
+  bool validateFrameCRC(uint16_t calculatedCRC);
+
+  /**
+   * @brief Reconstruct frame CRC according to provided byte ordering.
+   */
+  uint16_t extractFrameCRC(DTSCRCByteOrder order) const;
+
+  /**
+   * @brief Append CRC bytes to outgoing command according to active order.
+   */
+  void appendCommandCRC(byte *buffer, int &index, uint16_t crc) const;
+
+  /**
+   * @brief Reset runtime CRC byte-order tracking state.
+   */
+  void resetCRCByteOrderState();
 };
 
 #endif // DTS6012M_UART_H

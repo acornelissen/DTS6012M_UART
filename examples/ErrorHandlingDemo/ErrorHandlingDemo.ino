@@ -24,7 +24,9 @@ DTSConfig robustConfig = {
   .crcEnabled = true,           // Keep CRC enabled for reliability
   .maxValidDistance_mm = 20000,
   .minValidDistance_mm = 30,
-  .minIntensityThreshold = 80   // Lower threshold for marginal conditions
+  .minIntensityThreshold = 80,  // Lower threshold for marginal conditions
+  .crcByteOrder = DTSCRCByteOrder::AUTO,  // Auto-handle CRC byte-order variants
+  .crcAutoSwitchErrorThreshold = 200      // Switch after repeated CRC failures
 };
 
 DTS6012M_UART dtsSensor(SensorSerial, robustConfig);
@@ -268,14 +270,16 @@ void handleRecoveryOperation() {
       case 4:
         Serial.print("Factory reset attempt... ");
         dtsSensor.factoryReset();
-        dtsSensor.enableCRC(true); // Re-enable CRC\n        recoverySuccess = (dtsSensor.begin() == DTSError::NONE);
+        dtsSensor.enableCRC(true); // Re-enable CRC
+        recoverySuccess = (dtsSensor.begin() == DTSError::NONE);
         break;
         
       default:
         Serial.print("Maximum recovery attempts reached ");
         changeOperationMode(OperationMode::MAINTENANCE);
         return;
-    }\n    
+    }
+
     if (recoverySuccess) {
       Serial.println("SUCCESS");
       errorState.inRecoveryMode = false;

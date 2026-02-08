@@ -47,6 +47,11 @@ void setup() {
       delay(100);
     }
   }
+
+  // Optional: Set CRC byte order for specific sensor variants.
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
+
   Serial.println("-------------------------------------");
 }
 

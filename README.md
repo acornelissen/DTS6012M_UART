@@ -16,6 +16,8 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
 * Starts and stops the sensor's continuous measurement stream with `enableSensor()` and `disableSensor()`.
 * Parses incoming data frames according to the datasheet protocol.
 * Performs Modbus CRC-16 checksum validation for data integrity (can be optionally disabled for performance).
+* Supports CRC byte-order modes: `LSB_THEN_MSB` (default), `MSB_THEN_LSB`, and `AUTO` failover.
+* In `AUTO` mode, can switch CRC byte order automatically after repeated CRC failures.
 * Provides easy-to-use functions to retrieve:
     * Primary Target Distance (mm)
     * Primary Target Intensity
@@ -97,6 +99,12 @@ void setup() {
   // For maximum performance, you can disable the CRC check.
   // This reduces processing overhead but increases the risk of using corrupted data if transmission errors occur.
   // dtsSensor.enableCRC(false); // CRC is ENABLED by default. Uncomment this line to disable it.
+
+  // --- Optional: CRC Byte-Order Mode ---
+  // Default is LSB_THEN_MSB.
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO); // starts with LSB_THEN_MSB
+  // dtsSensor.setCRCAutoSwitchErrorThreshold(200);    // switch after 200 consecutive CRC failures
   
   // --- Optional: Control sensor enable/disable ---
   // dtsSensor.disableSensor(); // Stop measurements
@@ -142,6 +150,8 @@ struct DTSConfig {
   uint16_t maxValidDistance_mm = 20000;    // Maximum valid distance
   uint16_t minValidDistance_mm = 30;       // Minimum valid distance  
   uint16_t minIntensityThreshold = 100;    // Minimum signal strength
+  DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::LSB_THEN_MSB; // CRC byte order mode
+  uint16_t crcAutoSwitchErrorThreshold = 200; // AUTO mode threshold
 };
 
 // Constructor with configuration
@@ -171,6 +181,28 @@ if (result != DTSError::NONE) {
   Serial.println(static_cast<int>(result));
   // Handle error appropriately
 }
+```
+
+### CRC Byte-Order Modes
+
+```cpp
+enum class DTSCRCByteOrder : byte {
+  LSB_THEN_MSB = 0,  // Default behavior
+  MSB_THEN_LSB = 1,  // Alternate sensor variants
+  AUTO = 2           // Auto-switch after repeated CRC failures
+};
+
+// Fixed CRC order
+sensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
+sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+
+// Auto mode: starts with LSB_THEN_MSB and flips after threshold failures
+sensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
+sensor.setCRCAutoSwitchErrorThreshold(200);
+
+// Inspect configured and currently active mode
+DTSCRCByteOrder configured = sensor.getCRCByteOrder();
+DTSCRCByteOrder active = sensor.getActiveCRCByteOrder();
 ```
 
 ### Data Quality Assessment
@@ -289,6 +321,13 @@ if (result != DTSError::NONE) {
 // Performance optimization
 sensor.enableCRC(false);  // Disable CRC for speed
 // Use with caution - reduces reliability
+
+// CRC byte order (default: LSB_THEN_MSB)
+sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+
+// AUTO failover for mixed sensor populations
+sensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
+sensor.setCRCAutoSwitchErrorThreshold(200); // Switch after repeated CRC failures
 ```
 
 ## Examples
@@ -310,6 +349,7 @@ Run the comprehensive test suite:
 
 Test coverage includes:
 - ✅ Frame parsing and validation
+- ✅ CRC byte-order modes and AUTO failover
 - ✅ Error handling and recovery  
 - ✅ Data quality assessment
 - ✅ Statistics calculations
