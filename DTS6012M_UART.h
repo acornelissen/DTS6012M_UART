@@ -51,6 +51,17 @@ enum class DTSCommand : byte {
   GET_FRAME_RATE = 0x1B
 };
 
+// Legacy command constants kept for source compatibility with main/v1 sketches.
+constexpr byte DTS_CMD_START_STREAM = static_cast<byte>(DTSCommand::START_STREAM);
+constexpr byte DTS_CMD_STOP_STREAM = static_cast<byte>(DTSCommand::STOP_STREAM);
+constexpr byte DTS_CMD_GET_VERSION = static_cast<byte>(DTSCommand::GET_VERSION);
+constexpr byte DTS_CMD_SET_BAUD = static_cast<byte>(DTSCommand::SET_BAUD);
+constexpr byte DTS_CMD_GET_BAUD = static_cast<byte>(DTSCommand::GET_BAUD);
+constexpr byte DTS_CMD_SET_I2C_ADDR = static_cast<byte>(DTSCommand::SET_I2C_ADDR);
+constexpr byte DTS_CMD_GET_I2C_ADDR = static_cast<byte>(DTSCommand::GET_I2C_ADDR);
+constexpr byte DTS_CMD_SET_FRAME_RATE = static_cast<byte>(DTSCommand::SET_FRAME_RATE);
+constexpr byte DTS_CMD_GET_FRAME_RATE = static_cast<byte>(DTSCommand::GET_FRAME_RATE);
+
 // Error codes for better error reporting
 enum class DTSError : byte {
   NONE = 0x00,
@@ -235,6 +246,12 @@ public:
    * @return DTSError::NONE on success, error code on failure
    */
   DTSError sendCommand(DTSCommand cmd, const byte *dataPayload = nullptr, uint16_t payloadLength = 0);
+
+  /**
+   * @brief Legacy source-compatible command API (main/v1 style).
+   * @note Mirrors the original void signature and accepts raw command bytes.
+   */
+  void sendCommand(byte cmd, const byte *dataPayload = nullptr, uint16_t payloadLength = 0);
 
   /**
    * @brief Configure sensor parameters

@@ -486,6 +486,30 @@ void testCommandSending() {
   testFramework.assertEqual(static_cast<int>(crc & 0xFF), static_cast<int>(frame[frameLen - 1]), "Command CRC LSB byte in MSB->LSB mode");
 }
 
+void testLegacyCommandApiCompatibility() {
+  Serial.println("Running Legacy Command API Compatibility Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  mockSerial.resetMock();
+
+  // Legacy symbols should remain valid and route through command transmission.
+  sensor.sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+  testFramework.assertTrue(mockSerial.getSentDataLength() > 0, "Legacy sendCommand(byte,...) sends data");
+
+  const byte *frame = mockSerial.getSentData();
+  testFramework.assertEqual(static_cast<int>(DTS_CMD_STOP_STREAM), static_cast<int>(frame[3]), "Legacy command byte preserved in frame");
+
+  // Legacy API should still support payloads larger than the fixed pre-allocated command buffer.
+  mockSerial.resetMock();
+  byte largePayload[24];
+  for (int i = 0; i < 24; ++i) {
+    largePayload[i] = static_cast<byte>(i);
+  }
+  sensor.sendCommand(DTS_CMD_SET_FRAME_RATE, largePayload, 24);
+  testFramework.assertEqual(33, mockSerial.getSentDataLength(), "Legacy sendCommand supports payload > 23 bytes");
+}
+
 void testResetAndFactoryBehavior() {
   Serial.println("Running Reset/Factory Tests...");
   
@@ -530,6 +554,7 @@ void runAllTests() {
   testStatistics();
   testCalibration();
   testCommandSending();
+  testLegacyCommandApiCompatibility();
   testResetAndFactoryBehavior();
   
   testFramework.printSummary();

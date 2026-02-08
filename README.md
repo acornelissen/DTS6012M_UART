@@ -27,6 +27,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
     * Correction Values (Primary & Secondary)
 * Allows disabling the CRC check via `enableCRC(false)` for potentially faster updates, at the risk of accepting corrupted data.
 * Sensor enable/disable control for power management and measurement control.
+* Preserves source compatibility with `main`/v1 command symbols (`DTS_CMD_*`) and `sendCommand(byte, ...)`.
 * Includes example sketch demonstrating usage with enable/disable functionality.
 
 ## Hardware Requirements
@@ -330,6 +331,22 @@ sensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
 sensor.setCRCAutoSwitchErrorThreshold(200); // Switch after repeated CRC failures
 ```
 
+### Legacy API Compatibility (main/v1)
+
+```cpp
+// Legacy command constants are still available
+sensor.sendCommand(DTS_CMD_START_STREAM, NULL, 0);
+sensor.sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+
+// Legacy bool-style usage still works
+if (sensor.begin()) {
+  if (sensor.update()) {
+    uint16_t distance = sensor.getDistance();
+    (void)distance;
+  }
+}
+```
+
 ## Examples
 
 The library includes comprehensive examples:
@@ -350,6 +367,7 @@ Run the comprehensive test suite:
 Test coverage includes:
 - ✅ Frame parsing and validation
 - ✅ CRC byte-order modes and AUTO failover
+- ✅ Legacy API compatibility (`DTS_CMD_*`, `sendCommand(byte, ...)`)
 - ✅ Error handling and recovery  
 - ✅ Data quality assessment
 - ✅ Statistics calculations

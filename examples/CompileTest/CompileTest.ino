@@ -27,6 +27,11 @@ void setup() {
   if (success) {
     Serial.println("Bool conversion OK");
   }
+
+  // Test legacy command constants + legacy sendCommand(byte, ...)
+  dtsSensor.sendCommand(DTS_CMD_STOP_STREAM, NULL, 0);
+  dtsSensor.sendCommand(DTS_CMD_START_STREAM, NULL, 0);
+  Serial.println("Legacy command API OK");
 }
 
 void loop() {

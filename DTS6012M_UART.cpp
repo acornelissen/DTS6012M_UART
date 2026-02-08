@@ -466,6 +466,46 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
   return DTSError::NONE;
 }
 
+void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payloadLength)
+{
+  // Preserve main/v1 behavior for larger payloads that exceed the pre-allocated frame buffer.
+  if (payloadLength <= (DTS_MAX_COMMAND_FRAME_SIZE - 9)) {
+    (void)sendCommand(static_cast<DTSCommand>(cmd), dataPayload, payloadLength);
+    return;
+  }
+
+  if (!_serial) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+    return;
+  }
+
+  const size_t frameSize = static_cast<size_t>(9u + payloadLength);
+  byte *frame = static_cast<byte *>(malloc(frameSize));
+  if (frame == nullptr) {
+    recordError(DTSError::INVALID_COMMAND);
+    return;
+  }
+
+  int frameIndex = 0;
+  frame[frameIndex++] = DTS_HEADER;
+  frame[frameIndex++] = DTS_DEVICE_NO;
+  frame[frameIndex++] = DTS_DEVICE_TYPE;
+  frame[frameIndex++] = cmd;
+  frame[frameIndex++] = 0x00;
+  frame[frameIndex++] = (payloadLength >> 8) & 0xFF;
+  frame[frameIndex++] = payloadLength & 0xFF;
+
+  if (dataPayload != nullptr && payloadLength > 0) {
+    memcpy(&frame[frameIndex], dataPayload, payloadLength);
+    frameIndex += payloadLength;
+  }
+
+  uint16_t crc = calculateCRC16(frame, frameIndex);
+  appendCommandCRC(frame, frameIndex, crc);
+  _serial.write(frame, frameIndex);
+  free(frame);
+}
+
 /**
  * @brief Optimized CRC-16 calculation with lookup table
  * @param data Pointer to the byte array
