@@ -42,6 +42,10 @@ constexpr byte DTS_DEVICE_TYPE = 0x20;
 enum class DTSCommand : byte {
   START_STREAM = 0x01,
   STOP_STREAM = 0x02,
+  WRITE_IIC_REG = 0x03,
+  READ_IIC_REG = 0x04,
+  START_HISTOGRAM = 0x07,
+  START_SPAD_HEATMAP = 0x09,
   GET_VERSION = 0x0A,
   SET_BAUD = 0x10,
   GET_BAUD = 0x11,
@@ -61,6 +65,10 @@ constexpr byte DTS_CMD_SET_I2C_ADDR = static_cast<byte>(DTSCommand::SET_I2C_ADDR
 constexpr byte DTS_CMD_GET_I2C_ADDR = static_cast<byte>(DTSCommand::GET_I2C_ADDR);
 constexpr byte DTS_CMD_SET_FRAME_RATE = static_cast<byte>(DTSCommand::SET_FRAME_RATE);
 constexpr byte DTS_CMD_GET_FRAME_RATE = static_cast<byte>(DTSCommand::GET_FRAME_RATE);
+constexpr byte DTS_CMD_WRITE_IIC_REG = static_cast<byte>(DTSCommand::WRITE_IIC_REG);
+constexpr byte DTS_CMD_READ_IIC_REG = static_cast<byte>(DTSCommand::READ_IIC_REG);
+constexpr byte DTS_CMD_START_HISTOGRAM = static_cast<byte>(DTSCommand::START_HISTOGRAM);
+constexpr byte DTS_CMD_START_SPAD_HEATMAP = static_cast<byte>(DTSCommand::START_SPAD_HEATMAP);
 
 // Error codes for better error reporting
 enum class DTSError : byte {
@@ -312,6 +320,48 @@ public:
    * @return DTSResult that converts to bool (v1.x) or DTSError (v2.0)
    */
   DTSResult disableSensor();
+
+  // --- IIC Register Access (datasheet commands 0x03/0x04) ---
+
+  /**
+   * @brief Write to an internal IIC register on the sensor
+   * @param regAddr Register address
+   * @param data Pointer to data bytes to write
+   * @param length Number of bytes to write
+   * @return DTSError::NONE on success
+   */
+  DTSError writeIICRegister(byte regAddr, const byte *data, uint8_t length);
+
+  /**
+   * @brief Read from an internal IIC register on the sensor
+   * @param regAddr Register address
+   * @param length Number of bytes to read
+   * @param responseBuffer Buffer to receive the response (must be at least length bytes)
+   * @param responseLength Actual number of bytes received (set on return)
+   * @param timeout_ms Timeout in milliseconds for the response
+   * @return DTSError::NONE on success
+   */
+  DTSError readIICRegister(byte regAddr, uint8_t length, byte *responseBuffer, uint8_t &responseLength, unsigned long timeout_ms = 500);
+
+  // --- Diagnostic Streams (datasheet commands 0x07/0x09) ---
+
+  /**
+   * @brief Start histogram data stream (command 0x07)
+   * @return DTSError::NONE on success
+   * @note Response frames contain 256x4 uint16 values (2048 bytes).
+   *       Use the generic sendCommand() or a raw serial read loop to
+   *       capture the large response frames.
+   */
+  DTSError startHistogramStream();
+
+  /**
+   * @brief Start SPAD heatmap data stream (command 0x09)
+   * @return DTSError::NONE on success
+   * @note Response frames contain 16x8 uint16 values (256 bytes).
+   *       Use the generic sendCommand() or a raw serial read loop to
+   *       capture the large response frames.
+   */
+  DTSError startSPADHeatmapStream();
 
   /**
    * @brief Clear library-side calibration, statistics, and error history.

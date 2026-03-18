@@ -373,6 +373,76 @@ DTSResult DTS6012M_UART::disableSensor()
   return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
 }
 
+// --- IIC Register Access ---
+
+DTSError DTS6012M_UART::writeIICRegister(byte regAddr, const byte *data, uint8_t length)
+{
+  // Frame payload: [regAddr, length, data...]
+  byte payload[DTS_MAX_COMMAND_FRAME_SIZE - 9];
+  if (length + 2 > sizeof(payload)) {
+    return DTSError::INVALID_COMMAND;
+  }
+  payload[0] = regAddr;
+  payload[1] = length;
+  if (data != nullptr && length > 0) {
+    memcpy(&payload[2], data, length);
+  }
+  return sendCommand(DTSCommand::WRITE_IIC_REG, payload, length + 2);
+}
+
+DTSError DTS6012M_UART::readIICRegister(byte regAddr, uint8_t length, byte *responseBuffer, uint8_t &responseLength, unsigned long timeout_ms)
+{
+  // Send read request: [regAddr, length]
+  byte payload[2] = { regAddr, length };
+  DTSError err = sendCommand(DTSCommand::READ_IIC_REG, payload, 2);
+  if (err != DTSError::NONE) {
+    return err;
+  }
+
+  // Wait for response frame: Header(1) + DevNo(1) + DevType(1) + CMD(1) + Reserved(1) + Len(2) + Data(N) + CRC(2)
+  unsigned long start = millis();
+  int expected = 9 + length; // minimum expected frame size
+  int idx = 0;
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32]; // generous buffer
+  if (expected > (int)sizeof(buf)) expected = sizeof(buf);
+
+  while ((millis() - start) < timeout_ms) {
+    while (_serial.available() && idx < expected) {
+      buf[idx++] = _serial.read();
+    }
+    if (idx >= expected) break;
+  }
+
+  if (idx < 9) {
+    return DTSError::TIMEOUT;
+  }
+
+  // Validate header
+  if (buf[0] != DTS_HEADER || buf[1] != DTS_DEVICE_NO || buf[3] != static_cast<byte>(DTSCommand::READ_IIC_REG)) {
+    return DTSError::FRAME_HEADER_ERROR;
+  }
+
+  uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
+  responseLength = (dataLen <= length) ? dataLen : length;
+  if (responseLength > 0 && responseBuffer != nullptr) {
+    memcpy(responseBuffer, &buf[7], responseLength);
+  }
+
+  return DTSError::NONE;
+}
+
+// --- Diagnostic Streams ---
+
+DTSError DTS6012M_UART::startHistogramStream()
+{
+  return sendCommand(DTSCommand::START_HISTOGRAM, nullptr, 0);
+}
+
+DTSError DTS6012M_UART::startSPADHeatmapStream()
+{
+  return sendCommand(DTSCommand::START_SPAD_HEATMAP, nullptr, 0);
+}
+
 DTSError DTS6012M_UART::resetState()
 {
   resetStatistics();
