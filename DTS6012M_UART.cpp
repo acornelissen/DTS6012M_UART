@@ -8,11 +8,6 @@
 #define pgm_read_word_near(addr) (*(const uint16_t *)(addr))
 #endif
 
-// Helper function to convert DTSCommand enum to byte
-static inline byte commandToByte(DTSCommand cmd) {
-  return static_cast<byte>(cmd);
-}
-
 /**
  * @brief Enhanced constructor with configuration support
  * @param serialPort A reference to the HardwareSerial port object (e.g., Serial1)
@@ -178,7 +173,7 @@ DTSError DTS6012M_UART::parseFrame()
   
   if (_rxBuffer[1] != DTS_DEVICE_NO || 
       _rxBuffer[2] != DTS_DEVICE_TYPE ||
-      _rxBuffer[3] != commandToByte(DTSCommand::START_STREAM)) {
+      _rxBuffer[3] != static_cast<byte>(DTSCommand::START_STREAM)) {
     return DTSError::FRAME_HEADER_INVALID;
   }
 
@@ -223,7 +218,12 @@ DTSError DTS6012M_UART::parseFrame()
   // 5. Add metadata
   newMeasurement.timestamp = millis();
   newMeasurement.primaryQuality = assessDataQuality(newMeasurement);
-  newMeasurement.secondaryQuality = assessDataQuality(newMeasurement); // Could be enhanced for secondary-specific logic
+
+  // Assess secondary target quality using secondary distance/intensity
+  DTSMeasurement secondaryProxy = newMeasurement;
+  secondaryProxy.primaryDistance_mm = newMeasurement.secondaryDistance_mm;
+  secondaryProxy.primaryIntensity = newMeasurement.secondaryIntensity;
+  newMeasurement.secondaryQuality = assessDataQuality(secondaryProxy);
   newMeasurement.lastError = DTSError::NONE;
   
   // 6. Store measurement and update statistics
@@ -259,8 +259,8 @@ uint16_t DTS6012M_UART::getIntensity() const
 bool DTS6012M_UART::isDataValid() const
 {
   return (_currentMeasurement.primaryQuality != DataQuality::INVALID &&
-          _currentMeasurement.primaryDistance_mm != DTS_INVALID_DISTANCE &&
-          _currentMeasurement.primaryIntensity >= _config.minIntensityThreshold);
+          _currentMeasurement.primaryQuality != DataQuality::POOR &&
+          _currentMeasurement.primaryDistance_mm != DTS_INVALID_DISTANCE);
 }
 
 DataQuality DTS6012M_UART::getDataQuality() const
@@ -419,7 +419,7 @@ DTSError DTS6012M_UART::readIICRegister(byte regAddr, uint8_t length, byte *resp
 
   // Validate header
   if (buf[0] != DTS_HEADER || buf[1] != DTS_DEVICE_NO || buf[3] != static_cast<byte>(DTSCommand::READ_IIC_REG)) {
-    return DTSError::FRAME_HEADER_ERROR;
+    return DTSError::FRAME_HEADER_INVALID;
   }
 
   uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
@@ -532,7 +532,7 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
   _commandFrame[frameIndex++] = DTS_HEADER;
   _commandFrame[frameIndex++] = DTS_DEVICE_NO;
   _commandFrame[frameIndex++] = DTS_DEVICE_TYPE;
-  _commandFrame[frameIndex++] = commandToByte(cmd);
+  _commandFrame[frameIndex++] = static_cast<byte>(cmd);
   _commandFrame[frameIndex++] = 0x00; // Reserved byte
   _commandFrame[frameIndex++] = (payloadLength >> 8) & 0xFF; // Length MSB
   _commandFrame[frameIndex++] = payloadLength & 0xFF; // Length LSB

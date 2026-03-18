@@ -409,7 +409,13 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.2.0 (Latest)
+### v2.2.1 (Latest)
+- 🐛 Fixed compile error: `DTSError::FRAME_HEADER_ERROR` → `FRAME_HEADER_INVALID` in `readIICRegister()`
+- 🐛 Fixed `isDataValid()` contradicting distance-aware quality assessment (was using flat intensity threshold)
+- 🐛 Fixed `secondaryQuality` always using primary distance/intensity instead of secondary target data
+- 🧹 Removed dead `commandToByte` helper
+
+### v2.2.0
 - 📋 Verified library against manufacturer datasheet (Docdt22 Rev1.2)
 - 🔧 Renamed `secondaryCorrection` → `temperatureCode` to match datasheet field 温度码 (backward-compat alias retained)
 - 🔧 Changed default CRC byte order to `MSB_THEN_LSB` per datasheet spec
