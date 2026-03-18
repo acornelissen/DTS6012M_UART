@@ -826,12 +826,23 @@ DataQuality DTS6012M_UART::assessDataQuality(const DTSMeasurement &measurement) 
     return DataQuality::POOR;
   }
   
-  // Intensity-based quality assessment
-  if (measurement.primaryIntensity < _config.minIntensityThreshold) {
+  // Scale intensity threshold by distance squared (inverse square law).
+  // A dim return at long range is physically expected — judge quality relative
+  // to what the sensor can produce at that distance, not a flat near-range value.
+  // Reference distance is 1000 mm; threshold is unchanged at or below that.
+  const float REF_DISTANCE_MM = 1000.0f;
+  float dist = static_cast<float>(measurement.primaryDistance_mm);
+  float scale = (REF_DISTANCE_MM * REF_DISTANCE_MM) / (dist * dist);
+  if (scale > 1.0f) scale = 1.0f;  // Don't raise threshold for close-range targets
+
+  float effectiveThreshold = static_cast<float>(_config.minIntensityThreshold) * scale;
+  float intensity = static_cast<float>(measurement.primaryIntensity);
+
+  if (intensity < effectiveThreshold) {
     return DataQuality::POOR;
-  } else if (measurement.primaryIntensity < (_config.minIntensityThreshold * 2)) {
+  } else if (intensity < (effectiveThreshold * 2.0f)) {
     return DataQuality::FAIR;
-  } else if (measurement.primaryIntensity < (_config.minIntensityThreshold * 4)) {
+  } else if (intensity < (effectiveThreshold * 4.0f)) {
     return DataQuality::GOOD;
   } else {
     return DataQuality::EXCELLENT;

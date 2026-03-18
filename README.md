@@ -409,7 +409,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.1.1 (Latest)
+### v2.1.2 (Latest)
+- 🔧 Distance-aware data quality assessment: intensity threshold now scales with distance squared (inverse square law), preventing valid long-range returns from being incorrectly scored as POOR
+
+### v2.1.1
 - 🔧 Reduced default `crcAutoSwitchErrorThreshold` from 200 to 100 for faster AUTO CRC byte-order failover
 
 ### v2.1.0
