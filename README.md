@@ -409,7 +409,14 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.1.2 (Latest)
+### v2.2.0 (Latest)
+- 📋 Verified library against manufacturer datasheet (Docdt22 Rev1.2)
+- 🔧 Renamed `secondaryCorrection` → `temperatureCode` to match datasheet field 温度码 (backward-compat alias retained)
+- 🔧 Changed default CRC byte order to `MSB_THEN_LSB` per datasheet spec
+- ✨ Added IIC register access: `writeIICRegister()`, `readIICRegister()` (commands 0x03/0x04)
+- ✨ Added diagnostic streams: `startHistogramStream()`, `startSPADHeatmapStream()` (commands 0x07/0x09)
+
+### v2.1.2
 - 🔧 Distance-aware data quality assessment: intensity threshold now scales with distance squared (inverse square law), preventing valid long-range returns from being incorrectly scored as POOR
 
 ### v2.1.1
