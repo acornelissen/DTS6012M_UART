@@ -156,7 +156,7 @@ uint16_t calculateTestCRC16(const byte *data, int len) {
   return crc;
 }
 
-void updateFrameCRC(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::LSB_THEN_MSB) {
+void updateFrameCRC(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::MSB_THEN_LSB) {
   uint16_t crc = calculateTestCRC16(frame, 21);
 
   if (order == DTSCRCByteOrder::MSB_THEN_LSB) {
@@ -169,7 +169,7 @@ void updateFrameCRC(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::LSB_TH
   frame[22] = (crc >> 8) & 0xFF;  // CRC MSB
 }
 
-void createValidFrame(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::LSB_THEN_MSB) {
+void createValidFrame(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::MSB_THEN_LSB) {
   // Create a valid DTS6012M frame for testing
   frame[0] = 0xA5;  // Header
   frame[1] = 0x03;  // Device No
@@ -181,7 +181,7 @@ void createValidFrame(byte *frame, DTSCRCByteOrder order = DTSCRCByteOrder::LSB_
   
   // Data payload (14 bytes) - example measurement data
   frame[7] = 0x00; frame[8] = 0x00;   // Secondary Distance (0)
-  frame[9] = 0x00; frame[10] = 0x00;  // Secondary Correction (0)
+  frame[9] = 0x00; frame[10] = 0x00;  // Temperature Code (0)
   frame[11] = 0x00; frame[12] = 0x00; // Secondary Intensity (0)
   frame[13] = 0xE8; frame[14] = 0x03; // Primary Distance (1000mm)
   frame[15] = 0x00; frame[16] = 0x00; // Primary Correction (0)
@@ -291,24 +291,24 @@ void testCRCByteOrderModes() {
 
   byte frame[23];
 
-  // Default mode should accept LSB->MSB CRC.
-  createValidFrame(frame, DTSCRCByteOrder::LSB_THEN_MSB);
+  // Default mode (MSB->LSB per datasheet) should accept MSB->LSB CRC.
+  createValidFrame(frame, DTSCRCByteOrder::MSB_THEN_LSB);
   mockSerial.mockIncomingData(frame, 23);
   DTSError result = sensor.update();
-  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Default mode accepts LSB->MSB CRC");
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Default mode accepts MSB->LSB CRC");
 
-  // Fixed MSB->LSB mode should accept MSB->LSB CRC.
-  sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // Fixed LSB->MSB mode should accept LSB->MSB CRC.
+  sensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
+  createValidFrame(frame, DTSCRCByteOrder::LSB_THEN_MSB);
+  mockSerial.mockIncomingData(frame, 23);
+  result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "LSB->MSB mode accepts LSB->MSB CRC");
+
+  // Fixed LSB->MSB mode should reject MSB->LSB CRC.
   createValidFrame(frame, DTSCRCByteOrder::MSB_THEN_LSB);
   mockSerial.mockIncomingData(frame, 23);
   result = sensor.update();
-  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "MSB->LSB mode accepts MSB->LSB CRC");
-
-  // Fixed MSB->LSB mode should reject LSB->MSB CRC.
-  createValidFrame(frame, DTSCRCByteOrder::LSB_THEN_MSB);
-  mockSerial.mockIncomingData(frame, 23);
-  result = sensor.update();
-  testFramework.assertEqual(static_cast<int>(DTSError::CRC_CHECK_FAILED), static_cast<int>(result), "MSB->LSB mode rejects LSB->MSB CRC");
+  testFramework.assertEqual(static_cast<int>(DTSError::CRC_CHECK_FAILED), static_cast<int>(result), "LSB->MSB mode rejects MSB->LSB CRC");
 }
 
 void testAutoCRCByteOrderSwitch() {
@@ -330,30 +330,30 @@ void testAutoCRCByteOrderSwitch() {
   sensor.resetState();
   mockSerial.resetMock();
 
-  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::LSB_THEN_MSB),
+  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::MSB_THEN_LSB),
                             static_cast<int>(sensor.getActiveCRCByteOrder()),
-                            "AUTO mode starts with LSB->MSB");
+                            "AUTO mode starts with MSB->LSB");
 
-  byte msbFirstFrame[23];
-  createValidFrame(msbFirstFrame, DTSCRCByteOrder::MSB_THEN_LSB);
+  byte lsbFirstFrame[23];
+  createValidFrame(lsbFirstFrame, DTSCRCByteOrder::LSB_THEN_MSB);
 
-  // First two frames should fail while AUTO mode is still trying LSB->MSB.
-  mockSerial.mockIncomingData(msbFirstFrame, 23);
+  // First two frames should fail while AUTO mode is still trying MSB->LSB.
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
   DTSError result = sensor.update();
   testFramework.assertEqual(static_cast<int>(DTSError::CRC_CHECK_FAILED), static_cast<int>(result), "AUTO frame #1 fails before switch");
 
-  mockSerial.mockIncomingData(msbFirstFrame, 23);
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
   result = sensor.update();
   testFramework.assertEqual(static_cast<int>(DTSError::CRC_CHECK_FAILED), static_cast<int>(result), "AUTO frame #2 fails before switch");
 
   // Third consecutive failure reaches threshold, flips order, and retries same frame.
-  mockSerial.mockIncomingData(msbFirstFrame, 23);
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
   result = sensor.update();
   testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "AUTO frame #3 triggers switch and succeeds");
 
-  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::MSB_THEN_LSB),
+  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::LSB_THEN_MSB),
                             static_cast<int>(sensor.getActiveCRCByteOrder()),
-                            "AUTO mode switches to MSB->LSB");
+                            "AUTO mode switches to LSB->MSB");
 }
 
 void testDataQuality() {
@@ -472,18 +472,18 @@ void testCommandSending() {
   const byte *frame = mockSerial.getSentData();
   int frameLen = mockSerial.getSentDataLength();
   uint16_t crc = calculateTestCRC16(frame, frameLen - 2);
-  testFramework.assertEqual(static_cast<int>(crc & 0xFF), static_cast<int>(frame[frameLen - 2]), "Command CRC default LSB byte");
-  testFramework.assertEqual(static_cast<int>((crc >> 8) & 0xFF), static_cast<int>(frame[frameLen - 1]), "Command CRC default MSB byte");
+  testFramework.assertEqual(static_cast<int>((crc >> 8) & 0xFF), static_cast<int>(frame[frameLen - 2]), "Command CRC default MSB byte");
+  testFramework.assertEqual(static_cast<int>(crc & 0xFF), static_cast<int>(frame[frameLen - 1]), "Command CRC default LSB byte");
 
   mockSerial.resetMock();
-  sensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  sensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
   result = sensor.enableSensor();
-  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Enable sensor command with MSB->LSB CRC order");
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Enable sensor command with LSB->MSB CRC order");
   frame = mockSerial.getSentData();
   frameLen = mockSerial.getSentDataLength();
   crc = calculateTestCRC16(frame, frameLen - 2);
-  testFramework.assertEqual(static_cast<int>((crc >> 8) & 0xFF), static_cast<int>(frame[frameLen - 2]), "Command CRC MSB byte in MSB->LSB mode");
-  testFramework.assertEqual(static_cast<int>(crc & 0xFF), static_cast<int>(frame[frameLen - 1]), "Command CRC LSB byte in MSB->LSB mode");
+  testFramework.assertEqual(static_cast<int>(crc & 0xFF), static_cast<int>(frame[frameLen - 2]), "Command CRC LSB byte in LSB->MSB mode");
+  testFramework.assertEqual(static_cast<int>((crc >> 8) & 0xFF), static_cast<int>(frame[frameLen - 1]), "Command CRC MSB byte in LSB->MSB mode");
 }
 
 void testLegacyCommandApiCompatibility() {

@@ -41,8 +41,8 @@ void setup() {
   }
 
   // Optional: Select CRC byte order for sensor variants.
-  // Default is LSB_THEN_MSB.
-  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // Default is MSB_THEN_LSB (per datasheet).
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
   // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
   
   Serial.println("Starting measurements...");

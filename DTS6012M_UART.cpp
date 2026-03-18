@@ -31,7 +31,9 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
   _crcByteOrderMode = _config.crcByteOrder;
-  _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  _activeCRCByteOrder = (_config.crcByteOrder == DTSCRCByteOrder::AUTO)
+                            ? DTSCRCByteOrder::MSB_THEN_LSB
+                            : _config.crcByteOrder;
   _crcErrorStreak = 0;
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
@@ -47,7 +49,7 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
     .primaryCorrection = 0,
     .secondaryDistance_mm = DTS_INVALID_DISTANCE,
     .secondaryIntensity = DTS_INVALID_INTENSITY,
-    .secondaryCorrection = 0,
+    .temperatureCode = 0,
     .sunlightBase = 0,
     .timestamp = 0,
     .primaryQuality = DataQuality::INVALID,
@@ -202,8 +204,8 @@ DTSError DTS6012M_UART::parseFrame()
   DTSMeasurement newMeasurement;
   newMeasurement.secondaryDistance_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) | 
                                         _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
-  newMeasurement.secondaryCorrection = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR + 1] << 8) | 
-                                       _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_CORR];
+  newMeasurement.temperatureCode = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_TEMP_CODE + 1] << 8) |
+                                   _rxBuffer[dataPayloadOffset + DTS_IDX_TEMP_CODE];
   newMeasurement.secondaryIntensity = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT + 1] << 8) | 
                                       _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT];
   
@@ -287,9 +289,14 @@ uint16_t DTS6012M_UART::getSecondaryIntensity() const
   return _currentMeasurement.secondaryIntensity;
 }
 
+uint16_t DTS6012M_UART::getTemperatureCode() const
+{
+  return _currentMeasurement.temperatureCode;
+}
+
 uint16_t DTS6012M_UART::getSecondaryCorrection() const
 {
-  return _currentMeasurement.secondaryCorrection;
+  return _currentMeasurement.temperatureCode;
 }
 
 // --- Enhanced Control Methods ---
@@ -326,11 +333,11 @@ void DTS6012M_UART::setCRCByteOrder(DTSCRCByteOrder mode)
   _config.crcByteOrder = mode;
   _crcByteOrderMode = mode;
 
-  if (_crcByteOrderMode == DTSCRCByteOrder::MSB_THEN_LSB) {
+  if (_crcByteOrderMode == DTSCRCByteOrder::AUTO) {
+    // AUTO starts from MSB_THEN_LSB (datasheet default) and switches on failure.
     _activeCRCByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
   } else {
-    // AUTO starts from LSB_THEN_MSB for backward compatibility.
-    _activeCRCByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+    _activeCRCByteOrder = _crcByteOrderMode;
   }
 
   _crcErrorStreak = 0;

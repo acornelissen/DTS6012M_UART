@@ -99,7 +99,7 @@ struct DTSConfig {
   uint16_t maxValidDistance_mm = 20000;
   uint16_t minValidDistance_mm = 30;
   uint16_t minIntensityThreshold = 100;
-  DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::LSB_THEN_MSB;
+  DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
   uint16_t crcAutoSwitchErrorThreshold = 100;
 };
 
@@ -112,7 +112,8 @@ constexpr int DTS_CIRCULAR_BUFFER_SIZE = 64;
 
 // Indices within the 14-byte data payload (LSB first ordering)
 constexpr int DTS_IDX_SEC_DIST = 0;
-constexpr int DTS_IDX_SEC_CORR = 2;
+constexpr int DTS_IDX_TEMP_CODE = 2;
+constexpr int DTS_IDX_SEC_CORR = DTS_IDX_TEMP_CODE;  // v2.1.x backward compat alias
 constexpr int DTS_IDX_SEC_INT = 4;
 constexpr int DTS_IDX_PRI_DIST = 6;
 constexpr int DTS_IDX_PRI_CORR = 8;
@@ -151,7 +152,7 @@ struct DTSMeasurement {
   uint16_t primaryCorrection;
   uint16_t secondaryDistance_mm;
   uint16_t secondaryIntensity;
-  uint16_t secondaryCorrection;
+  uint16_t temperatureCode;
   uint16_t sunlightBase;
   unsigned long timestamp;
   DataQuality primaryQuality;
@@ -229,12 +230,18 @@ public:
    */
   DataQuality getDataQuality() const;
   
+  /**
+   * @brief Get temperature code from sensor
+   * @return Raw temperature code value
+   */
+  uint16_t getTemperatureCode() const;
+
   // Legacy getters maintained for backward compatibility
   uint16_t getSunlightBase() const;
   uint16_t getCorrection() const;
   uint16_t getSecondaryDistance() const;
   uint16_t getSecondaryIntensity() const;
-  uint16_t getSecondaryCorrection() const;
+  uint16_t getSecondaryCorrection() const;  // Deprecated: use getTemperatureCode()
 
   // --- Enhanced Control Methods ---
 
@@ -268,7 +275,7 @@ public:
 
   /**
    * @brief Set CRC byte-order mode used for validation and command transmission.
-   * AUTO starts in LSB_THEN_MSB mode and switches after repeated CRC failures.
+   * AUTO starts in MSB_THEN_LSB mode (per datasheet) and switches after repeated CRC failures.
    */
   void setCRCByteOrder(DTSCRCByteOrder mode);
 

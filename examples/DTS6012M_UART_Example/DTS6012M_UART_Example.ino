@@ -49,7 +49,7 @@ void setup() {
   }
 
   // Optional: Set CRC byte order for specific sensor variants.
-  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::MSB_THEN_LSB);
+  // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::LSB_THEN_MSB);
   // dtsSensor.setCRCByteOrder(DTSCRCByteOrder::AUTO);
 
   // Optional: legacy main/v1 command API is still supported.
