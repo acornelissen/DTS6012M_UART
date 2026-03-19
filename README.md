@@ -409,7 +409,15 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.2.1 (Latest)
+### v2.3.0 (Latest)
+- ✨ Added `getFilteredDistance()` — median filter over the 10-sample history buffer
+- ✨ Added `hasSecondaryTarget()` — convenience check for dual-peak detection
+- ✨ Added `newDataAvailable()` — edge-triggered flag, true once per new frame
+- ✨ Added `getFirmwareVersion()` — query sensor firmware version (command 0x0A)
+- 🐛 Fixed statistics overflow: `measurementCount`/`errorCount` widened to `uint32_t`
+- 🐛 Fixed `avgDistance` unsigned underflow when new reading < current average
+
+### v2.2.1
 - 🐛 Fixed compile error: `DTSError::FRAME_HEADER_ERROR` → `FRAME_HEADER_INVALID` in `readIICRegister()`
 - 🐛 Fixed `isDataValid()` contradicting distance-aware quality assessment (was using flat intensity threshold)
 - 🐛 Fixed `secondaryQuality` always using primary distance/intensity instead of secondary target data
