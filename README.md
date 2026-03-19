@@ -409,7 +409,12 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.3.0 (Latest)
+### v2.3.1 (Latest)
+- 🧪 Added tests for `newDataAvailable()`, `hasSecondaryTarget()`, `getFilteredDistance()`
+- 🔧 Fixed `-Wsign-compare` warning in `sendCommand()`
+- 49 tests, all passing
+
+### v2.3.0
 - ✨ Added `getFilteredDistance()` — median filter over the 10-sample history buffer
 - ✨ Added `hasSecondaryTarget()` — convenience check for dual-peak detection
 - ✨ Added `newDataAvailable()` — edge-triggered flag, true once per new frame
