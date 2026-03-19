@@ -173,8 +173,8 @@ struct DTSStatistics {
   uint16_t minDistance;
   uint16_t maxDistance;
   uint32_t avgDistance;
-  uint16_t measurementCount;
-  uint16_t errorCount;
+  uint32_t measurementCount;
+  uint32_t errorCount;
 };
 
 class DTS6012M_UART {

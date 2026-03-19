@@ -939,9 +939,8 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
       _statistics.maxDistance = measurement.primaryDistance_mm;
     }
     
-    // Update running average
-    _statistics.avgDistance = ((_statistics.avgDistance * (_statistics.measurementCount - 1)) + 
-                              measurement.primaryDistance_mm) / _statistics.measurementCount;
+    // Incremental average: avg += (new - avg) / count  (overflow-safe)
+    _statistics.avgDistance += (measurement.primaryDistance_mm - _statistics.avgDistance) / _statistics.measurementCount;
   }
   
   if (measurement.lastError != DTSError::NONE) {
