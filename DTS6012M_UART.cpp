@@ -138,27 +138,38 @@ DTSResult DTS6012M_UART::update()
     }
   }
   
-  // Process circular buffer for complete frames
-  result = processCircularBuffer();
-  if (result == DTSError::NONE) {
-    newFrameReceived = true;
-    _lastValidFrameTime = millis();
-    _consecutiveErrors = 0;
-    _lastError = DTSError::NONE;
-  } else if (result != DTSError::TIMEOUT) {
-    _consecutiveErrors++;
-    recordError(result);
+  // Drain circular buffer so _currentMeasurement always holds the freshest
+  // reading, even when multiple frames have queued up at high frame rates.
+  DTSError lastParseError = DTSError::TIMEOUT;
+  for (;;) {
+    result = processCircularBuffer();
+    if (result == DTSError::NONE) {
+      newFrameReceived = true;
+      _lastValidFrameTime = millis();
+      _consecutiveErrors = 0;
+      _lastError = DTSError::NONE;
+    } else {
+      lastParseError = result;
+      break;  // No more complete frames available
+    }
   }
-  
-  // Check for communication timeout
+
+  // Record a single error for the last failed parse (if any).
+  // Skip TIMEOUT — that just means no more data is buffered.
+  if (!newFrameReceived && lastParseError != DTSError::TIMEOUT) {
+    _consecutiveErrors++;
+    recordError(lastParseError);
+  }
+
+  // Check for communication timeout (no valid frame in a long time)
   if (isTimeout()) {
-    recordError(DTSError::TIMEOUT);
+    _lastError = DTSError::TIMEOUT;
     resetFrameState();
     return DTSResult(DTSError::TIMEOUT);
   }
-  
+
   // Return success only if new frame was processed
-  return DTSResult(newFrameReceived ? DTSError::NONE : result);
+  return DTSResult(newFrameReceived ? DTSError::NONE : lastParseError);
 }
 
 /**
@@ -1029,10 +1040,6 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
     // Incremental average: avg += (new - avg) / count  (overflow-safe, signed to handle new < avg)
     int32_t delta = (int32_t)measurement.primaryDistance_mm - (int32_t)_statistics.avgDistance;
     _statistics.avgDistance = (uint32_t)((int32_t)_statistics.avgDistance + delta / (int32_t)_statistics.measurementCount);
-  }
-  
-  if (measurement.lastError != DTSError::NONE) {
-    _statistics.errorCount++;
   }
 }
 
