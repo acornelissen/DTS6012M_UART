@@ -698,22 +698,14 @@ void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payl
   free(frame);
 }
 
-/**
- * @brief Optimized CRC-16 calculation with lookup table
- * @param data Pointer to the byte array
- * @param len The number of bytes in the array to checksum
- * @return The calculated 16-bit CRC value
- */
-uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
-{
-  // CRC-16/MODBUS Lookup Table
-  // Polynomial: 0x8005 (becomes 0xA001 when reflected for LSB-first processing)
-  // Initial Value: 0xFFFF
-  // Reflect Input: true, Reflect Output: true, XOR Output: 0x0000
+// CRC-16/MODBUS Lookup Table
+// Polynomial: 0x8005 (becomes 0xA001 when reflected for LSB-first processing)
+// Initial Value: 0xFFFF
+// Reflect Input: true, Reflect Output: true, XOR Output: 0x0000
 #if defined(ARDUINO_ARCH_AVR)
-  static const uint16_t crc_table[256] PROGMEM = {
+static const uint16_t crc_table[256] PROGMEM = {
 #else
-  static const uint16_t crc_table[256] = {
+static constexpr uint16_t crc_table[256] = {
 #endif
     0x0000,
     0xC0C1,
@@ -971,8 +963,10 @@ uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
     0x81C1,
     0x8081,
     0x4040
-  };
+};
 
+uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
+{
   uint16_t crc = 0xFFFF; // Initial value
 
   for (int i = 0; i < len; i++)
