@@ -638,7 +638,7 @@ DTSError DTS6012M_UART::sendCommand(DTSCommand cmd, const byte *dataPayload, uin
   size_t bytesWritten = _serial.write(_commandFrame, frameIndex);
   
   // Verify all bytes were sent
-  if (bytesWritten != frameIndex) {
+  if (bytesWritten != static_cast<size_t>(frameIndex)) {
     recordError(DTSError::SERIAL_INIT_FAILED);
     return DTSError::SERIAL_INIT_FAILED;
   }

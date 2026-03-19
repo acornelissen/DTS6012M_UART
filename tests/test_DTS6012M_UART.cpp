@@ -510,6 +510,84 @@ void testLegacyCommandApiCompatibility() {
   testFramework.assertEqual(33, mockSerial.getSentDataLength(), "Legacy sendCommand supports payload > 23 bytes");
 }
 
+void testNewDataAvailable() {
+  Serial.println("Running newDataAvailable Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // No data yet — should return false
+  testFramework.assertTrue(!sensor.newDataAvailable(), "No data available initially");
+
+  // Feed a valid frame
+  byte frame[23];
+  createValidFrame(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+
+  // First call should return true
+  testFramework.assertTrue(sensor.newDataAvailable(), "Data available after update");
+
+  // Second call should return false (edge-triggered)
+  testFramework.assertTrue(!sensor.newDataAvailable(), "Data flag cleared after read");
+}
+
+void testHasSecondaryTarget() {
+  Serial.println("Running hasSecondaryTarget Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Default frame has secondary distance/intensity = 0
+  byte frame[23];
+  createValidFrame(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertTrue(!sensor.hasSecondaryTarget(), "No secondary target with zero distance");
+
+  // Set secondary distance = 500mm and intensity = 30
+  createValidFrame(frame);
+  frame[7] = 0xF4; frame[8] = 0x01;   // Secondary distance 500 (LSB first)
+  frame[11] = 0x1E; frame[12] = 0x00; // Secondary intensity 30
+  updateFrameCRC(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertTrue(sensor.hasSecondaryTarget(), "Secondary target detected");
+}
+
+void testFilteredDistance() {
+  Serial.println("Running getFilteredDistance Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Fewer than 3 valid samples — should return INVALID
+  uint16_t filtered = sensor.getFilteredDistance();
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE), static_cast<int>(filtered), "Filtered distance invalid with empty history");
+
+  // Feed 5 frames with distances: 1000, 1200, 800, 1100, 900
+  byte frame[23];
+  uint16_t distances[] = {1000, 1200, 800, 1100, 900};
+  for (int i = 0; i < 5; i++) {
+    createValidFrame(frame);
+    frame[13] = distances[i] & 0xFF;
+    frame[14] = (distances[i] >> 8) & 0xFF;
+    updateFrameCRC(frame);
+    mockSerial.mockIncomingData(frame, 23);
+    sensor.update();
+  }
+
+  // Sorted: 800, 900, 1000, 1100, 1200 → median = 1000
+  filtered = sensor.getFilteredDistance();
+  testFramework.assertEqual(1000, static_cast<int>(filtered), "Filtered distance returns median");
+}
+
 void testResetAndFactoryBehavior() {
   Serial.println("Running Reset/Factory Tests...");
   
@@ -555,6 +633,9 @@ void runAllTests() {
   testCalibration();
   testCommandSending();
   testLegacyCommandApiCompatibility();
+  testNewDataAvailable();
+  testHasSecondaryTarget();
+  testFilteredDistance();
   testResetAndFactoryBehavior();
   
   testFramework.printSummary();
