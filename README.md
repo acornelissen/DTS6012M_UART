@@ -409,7 +409,15 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.3.1 (Latest)
+### v2.4.0 (Latest)
+- 🐛 Fixed error double-counting in `update()` — `errorCount` is now reliable
+- 🐛 Calibration (offset/scale) now applied to secondary distance, not just primary
+- ⚡ `update()` drains all queued frames so `_currentMeasurement` is always the freshest
+- ⚡ Circular buffer doubled to 128 bytes (5+ frames, resilient to ~55ms stalls)
+- ⚡ CRC lookup table moved to file-scope `constexpr` — saves 512 bytes RAM on ARM/ESP32
+- ✨ Added `setFrameRate()`, `getFrameRate()`, `setBaudRate()` convenience methods
+
+### v2.3.1
 - 🧪 Added tests for `newDataAvailable()`, `hasSecondaryTarget()`, `getFilteredDistance()`
 - 🔧 Fixed `-Wsign-compare` warning in `sendCommand()`
 - 49 tests, all passing
