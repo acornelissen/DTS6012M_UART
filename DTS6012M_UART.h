@@ -343,6 +343,29 @@ public:
    */
   DTSResult disableSensor();
 
+  /**
+   * @brief Set sensor frame rate
+   * @param fps Frame rate value (sensor-specific encoding)
+   * @return DTSError::NONE on success
+   */
+  DTSError setFrameRate(uint16_t fps);
+
+  /**
+   * @brief Get current sensor frame rate
+   * @param fps Variable to receive frame rate value
+   * @param timeout_ms Response timeout
+   * @return DTSError::NONE on success
+   */
+  DTSError getFrameRate(uint16_t &fps, unsigned long timeout_ms = 500);
+
+  /**
+   * @brief Change sensor baud rate and reconfigure the serial port
+   * @param newBaudRate Desired baud rate
+   * @param timeout_ms Time to wait for sensor acknowledgement
+   * @return DTSError::NONE on success
+   */
+  DTSError setBaudRate(unsigned long newBaudRate, unsigned long timeout_ms = 500);
+
   // --- IIC Register Access (datasheet commands 0x03/0x04) ---
 
   /**

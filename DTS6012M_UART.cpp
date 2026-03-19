@@ -441,6 +441,63 @@ DTSResult DTS6012M_UART::disableSensor()
   return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
 }
 
+DTSError DTS6012M_UART::setFrameRate(uint16_t fps)
+{
+  byte payload[2] = { static_cast<byte>((fps >> 8) & 0xFF), static_cast<byte>(fps & 0xFF) };
+  return sendCommand(DTSCommand::SET_FRAME_RATE, payload, 2);
+}
+
+DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
+{
+  DTSError err = sendCommand(DTSCommand::GET_FRAME_RATE, nullptr, 0);
+  if (err != DTSError::NONE) return err;
+
+  unsigned long start = millis();
+  int idx = 0;
+  byte buf[16];
+  while ((millis() - start) < timeout_ms) {
+    while (_serial.available() && idx < 9 + 2) {
+      buf[idx++] = _serial.read();
+    }
+    if (idx >= 9 + 2) break;
+  }
+  if (idx < 9) return DTSError::TIMEOUT;
+  if (buf[0] != DTS_HEADER || buf[3] != static_cast<byte>(DTSCommand::GET_FRAME_RATE)) {
+    return DTSError::FRAME_HEADER_INVALID;
+  }
+  uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
+  if (dataLen >= 2) {
+    fps = ((uint16_t)buf[7] << 8) | buf[8];
+  }
+  return DTSError::NONE;
+}
+
+DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long timeout_ms)
+{
+  // Send baud rate as 4-byte big-endian payload
+  byte payload[4] = {
+    static_cast<byte>((newBaudRate >> 24) & 0xFF),
+    static_cast<byte>((newBaudRate >> 16) & 0xFF),
+    static_cast<byte>((newBaudRate >> 8) & 0xFF),
+    static_cast<byte>(newBaudRate & 0xFF)
+  };
+  DTSError err = sendCommand(DTSCommand::SET_BAUD, payload, 4);
+  if (err != DTSError::NONE) return err;
+
+  // Wait briefly for the sensor to process, then switch local serial
+  delay(timeout_ms > 100 ? 100 : timeout_ms);
+  _serial.end();
+  _serial.begin(newBaudRate);
+  delay(10);
+
+  if (!_serial) {
+    return DTSError::SERIAL_INIT_FAILED;
+  }
+
+  _config.baudRate = newBaudRate;
+  return DTSError::NONE;
+}
+
 // --- IIC Register Access ---
 
 DTSError DTS6012M_UART::writeIICRegister(byte regAddr, const byte *data, uint8_t length)
