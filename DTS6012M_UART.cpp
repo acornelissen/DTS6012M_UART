@@ -469,6 +469,36 @@ DTSStatistics DTS6012M_UART::getStatistics() const
   return _statistics;
 }
 
+uint16_t DTS6012M_UART::getFilteredDistance() const
+{
+  // Collect valid distances from history buffer
+  uint16_t valid[DTS_HISTORY_BUFFER_SIZE];
+  int count = 0;
+  for (int i = 0; i < DTS_HISTORY_BUFFER_SIZE; i++) {
+    uint16_t d = _measurementHistory[i].primaryDistance_mm;
+    if (d != DTS_INVALID_DISTANCE) {
+      valid[count++] = d;
+    }
+  }
+
+  if (count < 3) {
+    return DTS_INVALID_DISTANCE;
+  }
+
+  // Insertion sort (small fixed-size array)
+  for (int i = 1; i < count; i++) {
+    uint16_t key = valid[i];
+    int j = i - 1;
+    while (j >= 0 && valid[j] > key) {
+      valid[j + 1] = valid[j];
+      j--;
+    }
+    valid[j + 1] = key;
+  }
+
+  return valid[count / 2];
+}
+
 void DTS6012M_UART::resetStatistics()
 {
   _statistics = {

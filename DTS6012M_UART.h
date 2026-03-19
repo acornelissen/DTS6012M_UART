@@ -376,13 +376,20 @@ public:
   DTSError factoryReset();
 
   // --- Data Logging and Analysis ---
-  
+
   /**
    * @brief Get measurement statistics since last reset
    * @return DTSStatistics structure with analysis data
    */
   DTSStatistics getStatistics() const;
-  
+
+  /**
+   * @brief Get median-filtered distance from the history buffer.
+   * Ignores invalid readings. Returns DTS_INVALID_DISTANCE if fewer
+   * than 3 valid samples are available.
+   */
+  uint16_t getFilteredDistance() const;
+
   /**
    * @brief Reset statistics counters
    */
