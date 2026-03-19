@@ -116,7 +116,7 @@ struct DTSConfig {
 constexpr int DTS_RESPONSE_FRAME_LENGTH = 23;
 constexpr int DTS_DATA_LENGTH_EXPECTED = 14;
 constexpr int DTS_MAX_COMMAND_FRAME_SIZE = 32;
-constexpr int DTS_CIRCULAR_BUFFER_SIZE = 64;
+constexpr int DTS_CIRCULAR_BUFFER_SIZE = 128;
 
 // Indices within the 14-byte data payload (LSB first ordering)
 constexpr int DTS_IDX_SEC_DIST = 0;
