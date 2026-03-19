@@ -409,7 +409,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.4.0 (Latest)
+### v2.4.1 (Latest)
+- 🔧 Removed deprecated `getSecondaryCorrection()` and `DTS_IDX_SEC_CORR` — use `getTemperatureCode()` / `DTS_IDX_TEMP_CODE`
+
+### v2.4.0
 - 🐛 Fixed error double-counting in `update()` — `errorCount` is now reliable
 - 🐛 Calibration (offset/scale) now applied to secondary distance, not just primary
 - ⚡ `update()` drains all queued frames so `_currentMeasurement` is always the freshest
