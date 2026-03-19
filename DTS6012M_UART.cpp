@@ -209,8 +209,9 @@ DTSError DTS6012M_UART::parseFrame()
   constexpr int dataPayloadOffset = 7;
   
   DTSMeasurement newMeasurement;
-  newMeasurement.secondaryDistance_mm = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) | 
-                                        _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
+  uint16_t rawSecondaryDistance = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST + 1] << 8) |
+                                  _rxBuffer[dataPayloadOffset + DTS_IDX_SEC_DIST];
+  newMeasurement.secondaryDistance_mm = applyCalibratedDistance(rawSecondaryDistance);
   newMeasurement.temperatureCode = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_TEMP_CODE + 1] << 8) |
                                    _rxBuffer[dataPayloadOffset + DTS_IDX_TEMP_CODE];
   newMeasurement.secondaryIntensity = ((uint16_t)_rxBuffer[dataPayloadOffset + DTS_IDX_SEC_INT + 1] << 8) | 
