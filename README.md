@@ -267,8 +267,8 @@ struct DTSStatistics {
   uint16_t minDistance;        // Minimum measured distance
   uint16_t maxDistance;        // Maximum measured distance
   uint32_t avgDistance;        // Average distance
-  uint16_t measurementCount;   // Total measurements
-  uint16_t errorCount;         // Total errors
+  uint32_t measurementCount;   // Total measurements
+  uint32_t errorCount;         // Total errors
 };
 
 // Get statistics

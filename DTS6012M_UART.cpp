@@ -506,6 +506,7 @@ DTSError DTS6012M_UART::resetState()
   _distanceScale = 1.0f;
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
+  _newDataFlag = false;
   resetCRCByteOrderState();
   
   return DTSError::NONE;
@@ -1025,8 +1026,9 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
       _statistics.maxDistance = measurement.primaryDistance_mm;
     }
     
-    // Incremental average: avg += (new - avg) / count  (overflow-safe)
-    _statistics.avgDistance += (measurement.primaryDistance_mm - _statistics.avgDistance) / _statistics.measurementCount;
+    // Incremental average: avg += (new - avg) / count  (overflow-safe, signed to handle new < avg)
+    int32_t delta = (int32_t)measurement.primaryDistance_mm - (int32_t)_statistics.avgDistance;
+    _statistics.avgDistance = (uint32_t)((int32_t)_statistics.avgDistance + delta / (int32_t)_statistics.measurementCount);
   }
   
   if (measurement.lastError != DTSError::NONE) {
