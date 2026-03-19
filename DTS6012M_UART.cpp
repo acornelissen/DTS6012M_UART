@@ -33,6 +33,7 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
   _frameState = FrameState::WAITING_FOR_HEADER;
+  _newDataFlag = false;
 
   setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
   setCRCByteOrder(_config.crcByteOrder);
@@ -228,6 +229,7 @@ DTSError DTS6012M_UART::parseFrame()
   
   // 6. Store measurement and update statistics
   _currentMeasurement = newMeasurement;
+  _newDataFlag = true;
   
   // Store in history buffer
   _measurementHistory[_historyIndex] = newMeasurement;
@@ -297,6 +299,60 @@ uint16_t DTS6012M_UART::getTemperatureCode() const
 uint16_t DTS6012M_UART::getSecondaryCorrection() const
 {
   return _currentMeasurement.temperatureCode;
+}
+
+bool DTS6012M_UART::hasSecondaryTarget() const
+{
+  return _currentMeasurement.secondaryDistance_mm != DTS_INVALID_DISTANCE &&
+         _currentMeasurement.secondaryIntensity > 0;
+}
+
+bool DTS6012M_UART::newDataAvailable()
+{
+  bool avail = _newDataFlag;
+  _newDataFlag = false;
+  return avail;
+}
+
+DTSError DTS6012M_UART::getFirmwareVersion(byte *versionBuffer, uint8_t bufferSize, uint8_t &responseLength, unsigned long timeout_ms)
+{
+  DTSError err = sendCommand(DTSCommand::GET_VERSION, nullptr, 0);
+  if (err != DTSError::NONE) {
+    return err;
+  }
+
+  // Read response: Header(1) + DevNo(1) + DevType(1) + CMD(1) + Reserved(1) + Len(2) + Data(N) + CRC(2)
+  unsigned long start = millis();
+  int expected = 9 + bufferSize;
+  int idx = 0;
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
+  if (expected > (int)sizeof(buf)) expected = sizeof(buf);
+
+  while ((millis() - start) < timeout_ms) {
+    while (_serial.available() && idx < expected) {
+      buf[idx++] = _serial.read();
+    }
+    if (idx >= 9) {
+      uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
+      if (idx >= 9 + (int)dataLen) break;
+    }
+  }
+
+  if (idx < 9) {
+    return DTSError::TIMEOUT;
+  }
+
+  if (buf[0] != DTS_HEADER || buf[1] != DTS_DEVICE_NO || buf[3] != static_cast<byte>(DTSCommand::GET_VERSION)) {
+    return DTSError::FRAME_HEADER_INVALID;
+  }
+
+  uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
+  responseLength = (dataLen <= bufferSize) ? dataLen : bufferSize;
+  if (responseLength > 0 && versionBuffer != nullptr) {
+    memcpy(versionBuffer, &buf[7], responseLength);
+  }
+
+  return DTSError::NONE;
 }
 
 // --- Enhanced Control Methods ---

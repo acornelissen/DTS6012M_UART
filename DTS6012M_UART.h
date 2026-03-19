@@ -244,6 +244,28 @@ public:
    */
   uint16_t getTemperatureCode() const;
 
+  /**
+   * @brief Check whether a secondary (dual-peak) target was detected
+   * @return true if secondary distance is valid and intensity > 0
+   */
+  bool hasSecondaryTarget() const;
+
+  /**
+   * @brief Check whether update() produced a new frame since the last call
+   * @return true exactly once per new frame
+   */
+  bool newDataAvailable();
+
+  /**
+   * @brief Query sensor firmware version (command 0x0A)
+   * @param versionBuffer Buffer to receive version bytes
+   * @param bufferSize Size of buffer provided
+   * @param responseLength Actual bytes received (set on return)
+   * @param timeout_ms Response timeout
+   * @return DTSError::NONE on success
+   */
+  DTSError getFirmwareVersion(byte *versionBuffer, uint8_t bufferSize, uint8_t &responseLength, unsigned long timeout_ms = 500);
+
   // Legacy getters maintained for backward compatibility
   uint16_t getSunlightBase() const;
   uint16_t getCorrection() const;
@@ -442,6 +464,7 @@ private:
   DTSMeasurement _currentMeasurement;
   DTSMeasurement _measurementHistory[DTS_HISTORY_BUFFER_SIZE];
   int _historyIndex;
+  bool _newDataFlag;
   
   // Statistics and error tracking
   DTSStatistics _statistics;
