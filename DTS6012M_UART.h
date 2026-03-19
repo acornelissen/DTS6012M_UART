@@ -121,7 +121,6 @@ constexpr int DTS_CIRCULAR_BUFFER_SIZE = 128;
 // Indices within the 14-byte data payload (LSB first ordering)
 constexpr int DTS_IDX_SEC_DIST = 0;
 constexpr int DTS_IDX_TEMP_CODE = 2;
-constexpr int DTS_IDX_SEC_CORR = DTS_IDX_TEMP_CODE;  // v2.1.x backward compat alias
 constexpr int DTS_IDX_SEC_INT = 4;
 constexpr int DTS_IDX_PRI_DIST = 6;
 constexpr int DTS_IDX_PRI_CORR = 8;
@@ -271,7 +270,6 @@ public:
   uint16_t getCorrection() const;
   uint16_t getSecondaryDistance() const;
   uint16_t getSecondaryIntensity() const;
-  uint16_t getSecondaryCorrection() const;  // Deprecated: use getTemperatureCode()
 
   // --- Enhanced Control Methods ---
 

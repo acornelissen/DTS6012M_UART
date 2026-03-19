@@ -438,7 +438,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ### v2.2.0
 - 📋 Verified library against manufacturer datasheet (Docdt22 Rev1.2)
-- 🔧 Renamed `secondaryCorrection` → `temperatureCode` to match datasheet field 温度码 (backward-compat alias retained)
+- 🔧 Renamed `secondaryCorrection` → `temperatureCode` to match datasheet field 温度码
 - 🔧 Changed default CRC byte order to `MSB_THEN_LSB` per datasheet spec
 - ✨ Added IIC register access: `writeIICRegister()`, `readIICRegister()` (commands 0x03/0x04)
 - ✨ Added diagnostic streams: `startHistogramStream()`, `startSPADHeatmapStream()` (commands 0x07/0x09)

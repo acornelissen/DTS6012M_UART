@@ -308,10 +308,6 @@ uint16_t DTS6012M_UART::getTemperatureCode() const
   return _currentMeasurement.temperatureCode;
 }
 
-uint16_t DTS6012M_UART::getSecondaryCorrection() const
-{
-  return _currentMeasurement.temperatureCode;
-}
 
 bool DTS6012M_UART::hasSecondaryTarget() const
 {
