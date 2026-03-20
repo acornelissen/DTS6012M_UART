@@ -416,7 +416,10 @@ DTSResult DTS6012M_UART::disableSensor()
 DTSError DTS6012M_UART::setFrameRate(uint16_t fps)
 {
   byte payload[2] = { static_cast<byte>((fps >> 8) & 0xFF), static_cast<byte>(fps & 0xFF) };
-  return sendCommand(DTSCommand::SET_FRAME_RATE, payload, 2);
+  byte buf[16];
+  int bytesRead = 0;
+  return sendOneShot(DTSCommand::SET_FRAME_RATE, payload, 2,
+                     buf, sizeof(buf), bytesRead, 500);
 }
 
 DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
@@ -434,6 +437,10 @@ DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
   return DTSError::NONE;
 }
 
+// NOTE: If setBaudRate() returns TIMEOUT, it is possible (though unlikely) that
+// the sensor accepted the new rate but the verification header was lost to timing.
+// In that case the library has reverted to the old rate while the sensor runs at
+// the new one.  A power-cycle of the sensor will restore communication.
 DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long timeout_ms)
 {
   unsigned long oldBaudRate = _config.baudRate;
@@ -513,7 +520,10 @@ DTSError DTS6012M_UART::writeIICRegister(byte regAddr, const byte *data, uint8_t
   if (data != nullptr && length > 0) {
     memcpy(&payload[2], data, length);
   }
-  return sendCommand(DTSCommand::WRITE_IIC_REG, payload, length + 2);
+  byte buf[16];
+  int bytesRead = 0;
+  return sendOneShot(DTSCommand::WRITE_IIC_REG, payload, length + 2,
+                     buf, sizeof(buf), bytesRead, 500);
 }
 
 DTSError DTS6012M_UART::readIICRegister(byte regAddr, uint8_t length, byte *responseBuffer, uint8_t &responseLength, unsigned long timeout_ms)

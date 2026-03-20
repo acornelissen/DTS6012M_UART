@@ -361,6 +361,8 @@ public:
    * @param newBaudRate Desired baud rate
    * @param timeout_ms Time to wait for sensor acknowledgement
    * @return DTSError::NONE on success
+   * @note If TIMEOUT is returned, the sensor may have accepted the change while the
+   *       library reverted to the old rate. Power-cycle the sensor to recover.
    */
   DTSError setBaudRate(unsigned long newBaudRate, unsigned long timeout_ms = 500);
 
