@@ -409,7 +409,13 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.4.1 (Latest)
+### v2.5.0 (Latest)
+- 🐛 Fixed response interleaving: one-shot commands (`getFirmwareVersion`, `readIICRegister`, `getFrameRate`) now stop the stream, skip non-matching frames, validate CRC, and restart — prevents measurement data from being parsed as command responses
+- 🐛 `setBaudRate()` now verifies communication at the new rate and falls back to the old baud rate on failure
+- 🔧 `configure()` only restarts serial when baud rate actually changes
+- 🧪 Added partial frame delivery test (52 tests, all passing)
+
+### v2.4.1
 - 🔧 Removed deprecated `getSecondaryCorrection()` and `DTS_IDX_SEC_CORR` — use `getTemperatureCode()` / `DTS_IDX_TEMP_CODE`
 
 ### v2.4.0
