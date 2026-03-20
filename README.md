@@ -409,7 +409,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.5.2 (Latest)
+### v2.5.3 (Latest)
+- 🐛 Moved circular buffer reset into `resetFrameState()` — fixes stale-buffer bugs in `begin()`, `update()` timeout, `setBaudRate()` fallback, not just `sendOneShot()`
+- 🐛 Fixed `setBaudRate()` fallback paths: now resets frame state and updates `_lastValidFrameTime`
+
+### v2.5.2
 - 🐛 Fixed `sendOneShot()` not resetting circular buffer — stale bytes caused garbled frames after one-shot commands
 - 🐛 Fixed `sendOneShot()` not updating `_lastValidFrameTime` on timeout/error paths — a timed-out `getFirmwareVersion()` would starve `update()` into a false timeout
 
