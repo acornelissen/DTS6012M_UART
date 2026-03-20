@@ -586,6 +586,23 @@ private:
    * @brief Reset runtime CRC byte-order tracking state.
    */
   void resetCRCByteOrderState();
+
+  /**
+   * @brief Stop the measurement stream, flush stale bytes, send a command,
+   *        read the response (skipping any interleaved measurement frames),
+   *        and restart the stream.
+   * @param cmd         Command to send
+   * @param payload     Optional command payload
+   * @param payloadLen  Size of payload
+   * @param responseBuf Buffer to receive the full response frame
+   * @param responseBufSize Size of responseBuf
+   * @param bytesRead   Actual bytes received (set on return)
+   * @param timeout_ms  Response timeout
+   * @return DTSError::NONE on success
+   */
+  DTSError sendOneShot(DTSCommand cmd, const byte *payload, uint16_t payloadLen,
+                       byte *responseBuf, int responseBufSize, int &bytesRead,
+                       unsigned long timeout_ms);
 };
 
 #endif // DTS6012M_UART_H

@@ -324,42 +324,17 @@ bool DTS6012M_UART::newDataAvailable()
 
 DTSError DTS6012M_UART::getFirmwareVersion(byte *versionBuffer, uint8_t bufferSize, uint8_t &responseLength, unsigned long timeout_ms)
 {
-  DTSError err = sendCommand(DTSCommand::GET_VERSION, nullptr, 0);
-  if (err != DTSError::NONE) {
-    return err;
-  }
-
-  // Read response: Header(1) + DevNo(1) + DevType(1) + CMD(1) + Reserved(1) + Len(2) + Data(N) + CRC(2)
-  unsigned long start = millis();
-  int expected = 9 + bufferSize;
-  int idx = 0;
   byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
-  if (expected > (int)sizeof(buf)) expected = sizeof(buf);
-
-  while ((millis() - start) < timeout_ms) {
-    while (_serial.available() && idx < expected) {
-      buf[idx++] = _serial.read();
-    }
-    if (idx >= 9) {
-      uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
-      if (idx >= 9 + (int)dataLen) break;
-    }
-  }
-
-  if (idx < 9) {
-    return DTSError::TIMEOUT;
-  }
-
-  if (buf[0] != DTS_HEADER || buf[1] != DTS_DEVICE_NO || buf[3] != static_cast<byte>(DTSCommand::GET_VERSION)) {
-    return DTSError::FRAME_HEADER_INVALID;
-  }
+  int bytesRead = 0;
+  DTSError err = sendOneShot(DTSCommand::GET_VERSION, nullptr, 0,
+                              buf, sizeof(buf), bytesRead, timeout_ms);
+  if (err != DTSError::NONE) return err;
 
   uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
   responseLength = (dataLen <= bufferSize) ? dataLen : bufferSize;
   if (responseLength > 0 && versionBuffer != nullptr) {
     memcpy(versionBuffer, &buf[7], responseLength);
   }
-
   return DTSError::NONE;
 }
 
@@ -367,22 +342,23 @@ DTSError DTS6012M_UART::getFirmwareVersion(byte *versionBuffer, uint8_t bufferSi
 
 DTSError DTS6012M_UART::configure(const DTSConfig &config)
 {
+  unsigned long oldBaudRate = _config.baudRate;
   _config = config;
   setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
   setCRCByteOrder(_config.crcByteOrder);
-  
-  // Reinitialize serial if baud rate changed
-  if (_serial) {
+
+  // Only reinitialize serial if baud rate actually changed
+  if (_config.baudRate != oldBaudRate && _serial) {
     _serial.end();
     _serial.begin(_config.baudRate);
     delay(10);
-    
+
     if (!_serial) {
       recordError(DTSError::SERIAL_INIT_FAILED);
       return DTSError::SERIAL_INIT_FAILED;
     }
   }
-  
+
   return DTSError::NONE;
 }
 
@@ -445,22 +421,12 @@ DTSError DTS6012M_UART::setFrameRate(uint16_t fps)
 
 DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
 {
-  DTSError err = sendCommand(DTSCommand::GET_FRAME_RATE, nullptr, 0);
+  byte buf[16];
+  int bytesRead = 0;
+  DTSError err = sendOneShot(DTSCommand::GET_FRAME_RATE, nullptr, 0,
+                              buf, sizeof(buf), bytesRead, timeout_ms);
   if (err != DTSError::NONE) return err;
 
-  unsigned long start = millis();
-  int idx = 0;
-  byte buf[16];
-  while ((millis() - start) < timeout_ms) {
-    while (_serial.available() && idx < 9 + 2) {
-      buf[idx++] = _serial.read();
-    }
-    if (idx >= 9 + 2) break;
-  }
-  if (idx < 9) return DTSError::TIMEOUT;
-  if (buf[0] != DTS_HEADER || buf[3] != static_cast<byte>(DTSCommand::GET_FRAME_RATE)) {
-    return DTSError::FRAME_HEADER_INVALID;
-  }
   uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
   if (dataLen >= 2) {
     fps = ((uint16_t)buf[7] << 8) | buf[8];
@@ -470,6 +436,13 @@ DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
 
 DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long timeout_ms)
 {
+  unsigned long oldBaudRate = _config.baudRate;
+
+  // Stop stream before changing baud rate
+  sendCommand(DTSCommand::STOP_STREAM, nullptr, 0);
+  delay(5);
+  while (_serial.available()) { _serial.read(); }
+
   // Send baud rate as 4-byte big-endian payload
   byte payload[4] = {
     static_cast<byte>((newBaudRate >> 24) & 0xFF),
@@ -478,19 +451,51 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
     static_cast<byte>(newBaudRate & 0xFF)
   };
   DTSError err = sendCommand(DTSCommand::SET_BAUD, payload, 4);
-  if (err != DTSError::NONE) return err;
+  if (err != DTSError::NONE) {
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    return err;
+  }
 
-  // Wait briefly for the sensor to process, then switch local serial
-  delay(timeout_ms > 100 ? 100 : timeout_ms);
+  // Wait for sensor to process, then switch local serial
+  delay(50);
   _serial.end();
   _serial.begin(newBaudRate);
   delay(10);
 
   if (!_serial) {
+    // Fall back to old baud rate
+    _serial.end();
+    _serial.begin(oldBaudRate);
+    delay(10);
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
     return DTSError::SERIAL_INIT_FAILED;
   }
 
+  // Verify communication works at the new baud rate by requesting a frame
+  sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  unsigned long start = millis();
+  bool gotFrame = false;
+  while ((millis() - start) < timeout_ms) {
+    if (_serial.available()) {
+      byte b = _serial.read();
+      if (b == DTS_HEADER) {
+        gotFrame = true;
+        break;
+      }
+    }
+  }
+
+  if (!gotFrame) {
+    // Revert to old baud rate
+    _serial.end();
+    _serial.begin(oldBaudRate);
+    delay(10);
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    return DTSError::TIMEOUT;
+  }
+
   _config.baudRate = newBaudRate;
+  _lastValidFrameTime = millis();
   return DTSError::NONE;
 }
 
@@ -513,42 +518,18 @@ DTSError DTS6012M_UART::writeIICRegister(byte regAddr, const byte *data, uint8_t
 
 DTSError DTS6012M_UART::readIICRegister(byte regAddr, uint8_t length, byte *responseBuffer, uint8_t &responseLength, unsigned long timeout_ms)
 {
-  // Send read request: [regAddr, length]
   byte payload[2] = { regAddr, length };
-  DTSError err = sendCommand(DTSCommand::READ_IIC_REG, payload, 2);
-  if (err != DTSError::NONE) {
-    return err;
-  }
-
-  // Wait for response frame: Header(1) + DevNo(1) + DevType(1) + CMD(1) + Reserved(1) + Len(2) + Data(N) + CRC(2)
-  unsigned long start = millis();
-  int expected = 9 + length; // minimum expected frame size
-  int idx = 0;
-  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32]; // generous buffer
-  if (expected > (int)sizeof(buf)) expected = sizeof(buf);
-
-  while ((millis() - start) < timeout_ms) {
-    while (_serial.available() && idx < expected) {
-      buf[idx++] = _serial.read();
-    }
-    if (idx >= expected) break;
-  }
-
-  if (idx < 9) {
-    return DTSError::TIMEOUT;
-  }
-
-  // Validate header
-  if (buf[0] != DTS_HEADER || buf[1] != DTS_DEVICE_NO || buf[3] != static_cast<byte>(DTSCommand::READ_IIC_REG)) {
-    return DTSError::FRAME_HEADER_INVALID;
-  }
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
+  int bytesRead = 0;
+  DTSError err = sendOneShot(DTSCommand::READ_IIC_REG, payload, 2,
+                              buf, sizeof(buf), bytesRead, timeout_ms);
+  if (err != DTSError::NONE) return err;
 
   uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
   responseLength = (dataLen <= length) ? dataLen : length;
   if (responseLength > 0 && responseBuffer != nullptr) {
     memcpy(responseBuffer, &buf[7], responseLength);
   }
-
   return DTSError::NONE;
 }
 
@@ -1236,4 +1217,100 @@ void DTS6012M_UART::resetCRCByteOrderState()
 {
   setCRCAutoSwitchErrorThreshold(_config.crcAutoSwitchErrorThreshold);
   setCRCByteOrder(_config.crcByteOrder);
+}
+
+DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_t payloadLen,
+                                     byte *responseBuf, int responseBufSize, int &bytesRead,
+                                     unsigned long timeout_ms)
+{
+  // 1. Stop the measurement stream so response bytes aren't interleaved
+  sendCommand(DTSCommand::STOP_STREAM, nullptr, 0);
+  delay(5);
+
+  // 2. Flush any stale bytes from the serial buffer
+  while (_serial.available()) { _serial.read(); }
+  resetFrameState();
+
+  // 3. Send the actual command
+  DTSError err = sendCommand(cmd, payload, payloadLen);
+  if (err != DTSError::NONE) {
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    return err;
+  }
+
+  // 4. Read response, skipping any frames whose CMD byte doesn't match.
+  //    Each frame starts with 0xA5 header; we scan for the right one.
+  unsigned long start = millis();
+  byte cmdByte = static_cast<byte>(cmd);
+  bytesRead = 0;
+
+  while ((millis() - start) < timeout_ms) {
+    // Wait for header byte
+    if (!_serial.available()) continue;
+    byte b = _serial.read();
+    if (b != DTS_HEADER) continue;
+
+    // Read the next 6 header bytes (DevNo, DevType, CMD, Reserved, LenHi, LenLo)
+    byte hdr[7];
+    hdr[0] = DTS_HEADER;
+    int hdrIdx = 1;
+    while (hdrIdx < 7 && (millis() - start) < timeout_ms) {
+      if (_serial.available()) {
+        hdr[hdrIdx++] = _serial.read();
+      }
+    }
+    if (hdrIdx < 7) break;
+
+    uint16_t dataLen = ((uint16_t)hdr[5] << 8) | hdr[6];
+    int totalFrame = 7 + dataLen + 2; // header + data + CRC
+
+    // Wrong command? Skip this frame's remaining bytes.
+    if (hdr[3] != cmdByte) {
+      int toSkip = dataLen + 2;
+      while (toSkip > 0 && (millis() - start) < timeout_ms) {
+        if (_serial.available()) { _serial.read(); toSkip--; }
+      }
+      continue;
+    }
+
+    // Right command — read into caller's buffer
+    if (totalFrame > responseBufSize) totalFrame = responseBufSize;
+    memcpy(responseBuf, hdr, 7);
+    int idx = 7;
+    while (idx < totalFrame && (millis() - start) < timeout_ms) {
+      if (_serial.available()) {
+        responseBuf[idx++] = _serial.read();
+      }
+    }
+    bytesRead = idx;
+
+    // Validate CRC if we got the full frame (data + 2 CRC bytes)
+    if (bytesRead >= 7 + (int)dataLen + 2 && _config.crcEnabled) {
+      int frameWithoutCRC = 7 + dataLen;
+      uint16_t calcCRC = calculateCRC16(responseBuf, frameWithoutCRC);
+
+      byte crcHi = responseBuf[frameWithoutCRC];
+      byte crcLo = responseBuf[frameWithoutCRC + 1];
+      uint16_t recvCRC;
+      if (_activeCRCByteOrder == DTSCRCByteOrder::MSB_THEN_LSB) {
+        recvCRC = ((uint16_t)crcHi << 8) | crcLo;
+      } else {
+        recvCRC = ((uint16_t)crcLo << 8) | crcHi;
+      }
+
+      if (calcCRC != recvCRC) {
+        sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+        return DTSError::CRC_CHECK_FAILED;
+      }
+    }
+
+    // 5. Restart the measurement stream
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    _lastValidFrameTime = millis();
+    return DTSError::NONE;
+  }
+
+  // Timed out — restart stream anyway
+  sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  return DTSError::TIMEOUT;
 }

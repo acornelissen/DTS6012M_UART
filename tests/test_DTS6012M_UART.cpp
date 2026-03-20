@@ -588,6 +588,31 @@ void testFilteredDistance() {
   testFramework.assertEqual(1000, static_cast<int>(filtered), "Filtered distance returns median");
 }
 
+void testPartialFrameDelivery() {
+  Serial.println("Running Partial Frame Delivery Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  byte frame[23];
+  createValidFrame(frame);
+
+  // Deliver first 10 bytes
+  mockSerial.mockIncomingData(frame, 10);
+  DTSError result = sensor.update();
+  testFramework.assertTrue(result != DTSError::NONE, "Partial frame (10 bytes) does not succeed");
+
+  // Deliver remaining 13 bytes
+  mockSerial.mockIncomingData(frame + 10, 13);
+  result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Frame completes after remaining bytes arrive");
+
+  uint16_t distance = sensor.getDistance();
+  testFramework.assertEqual(1000, static_cast<int>(distance), "Correct distance from split-delivered frame");
+}
+
 void testResetAndFactoryBehavior() {
   Serial.println("Running Reset/Factory Tests...");
   
@@ -636,6 +661,7 @@ void runAllTests() {
   testNewDataAvailable();
   testHasSecondaryTarget();
   testFilteredDistance();
+  testPartialFrameDelivery();
   testResetAndFactoryBehavior();
   
   testFramework.printSummary();
