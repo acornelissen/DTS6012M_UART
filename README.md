@@ -409,7 +409,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.5.1 (Latest)
+### v2.5.2 (Latest)
+- 🐛 Fixed `sendOneShot()` not resetting circular buffer — stale bytes caused garbled frames after one-shot commands
+- 🐛 Fixed `sendOneShot()` not updating `_lastValidFrameTime` on timeout/error paths — a timed-out `getFirmwareVersion()` would starve `update()` into a false timeout
+
+### v2.5.1
 - 🔧 `setFrameRate()` and `writeIICRegister()` now route through `sendOneShot()` to prevent ack frames from polluting the measurement stream
 - 📝 Documented `setBaudRate()` timeout edge case (sensor may accept while library reverts)
 

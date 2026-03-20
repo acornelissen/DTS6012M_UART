@@ -1237,14 +1237,17 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
   sendCommand(DTSCommand::STOP_STREAM, nullptr, 0);
   delay(5);
 
-  // 2. Flush any stale bytes from the serial buffer
+  // 2. Flush any stale bytes from the serial and circular buffers
   while (_serial.available()) { _serial.read(); }
   resetFrameState();
+  _circularBufferHead = 0;
+  _circularBufferTail = 0;
 
   // 3. Send the actual command
   DTSError err = sendCommand(cmd, payload, payloadLen);
   if (err != DTSError::NONE) {
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    _lastValidFrameTime = millis();
     return err;
   }
 
@@ -1310,6 +1313,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
 
       if (calcCRC != recvCRC) {
         sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+        _lastValidFrameTime = millis();
         return DTSError::CRC_CHECK_FAILED;
       }
     }
@@ -1322,5 +1326,6 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
 
   // Timed out — restart stream anyway
   sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  _lastValidFrameTime = millis();
   return DTSError::TIMEOUT;
 }
