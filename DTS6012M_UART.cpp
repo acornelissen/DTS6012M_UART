@@ -474,11 +474,14 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
     _serial.end();
     _serial.begin(oldBaudRate);
     delay(10);
+    resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    _lastValidFrameTime = millis();
     return DTSError::SERIAL_INIT_FAILED;
   }
 
   // Verify communication works at the new baud rate by requesting a frame
+  resetFrameState();
   sendCommand(DTSCommand::START_STREAM, nullptr, 0);
   unsigned long start = millis();
   bool gotFrame = false;
@@ -497,11 +500,14 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
     _serial.end();
     _serial.begin(oldBaudRate);
     delay(10);
+    resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+    _lastValidFrameTime = millis();
     return DTSError::TIMEOUT;
   }
 
   _config.baudRate = newBaudRate;
+  resetFrameState();
   _lastValidFrameTime = millis();
   return DTSError::NONE;
 }
@@ -1153,6 +1159,8 @@ void DTS6012M_UART::resetFrameState()
 {
   _frameState = FrameState::WAITING_FOR_HEADER;
   _rxBufferIndex = 0;
+  _circularBufferHead = 0;
+  _circularBufferTail = 0;
 }
 
 bool DTS6012M_UART::isTimeout() const
@@ -1240,8 +1248,6 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
   // 2. Flush any stale bytes from the serial and circular buffers
   while (_serial.available()) { _serial.read(); }
   resetFrameState();
-  _circularBufferHead = 0;
-  _circularBufferTail = 0;
 
   // 3. Send the actual command
   DTSError err = sendCommand(cmd, payload, payloadLen);
