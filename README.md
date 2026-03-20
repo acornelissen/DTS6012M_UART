@@ -409,7 +409,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.5.0 (Latest)
+### v2.5.1 (Latest)
+- 🔧 `setFrameRate()` and `writeIICRegister()` now route through `sendOneShot()` to prevent ack frames from polluting the measurement stream
+- 📝 Documented `setBaudRate()` timeout edge case (sensor may accept while library reverts)
+
+### v2.5.0
 - 🐛 Fixed response interleaving: one-shot commands (`getFirmwareVersion`, `readIICRegister`, `getFrameRate`) now stop the stream, skip non-matching frames, validate CRC, and restart — prevents measurement data from being parsed as command responses
 - 🐛 `setBaudRate()` now verifies communication at the new rate and falls back to the old baud rate on failure
 - 🔧 `configure()` only restarts serial when baud rate actually changes
