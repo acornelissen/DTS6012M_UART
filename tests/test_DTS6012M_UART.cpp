@@ -318,8 +318,8 @@ void testAutoCRCByteOrderSwitch() {
     .baudRate = 921600,
     .timeout_ms = 1000,
     .crcEnabled = true,
-    .maxValidDistance_mm = 20000,
-    .minValidDistance_mm = 30,
+    .maxValidDistance_mm = 18000,
+    .minValidDistance_mm = 20,
     .minIntensityThreshold = 100,
     .crcByteOrder = DTSCRCByteOrder::AUTO,
     .crcAutoSwitchErrorThreshold = 3
@@ -363,8 +363,8 @@ void testDataQuality() {
     .baudRate = 921600,
     .timeout_ms = 1000,
     .crcEnabled = true,
-    .maxValidDistance_mm = 20000,
-    .minValidDistance_mm = 30,
+    .maxValidDistance_mm = 18000,
+    .minValidDistance_mm = 20,
     .minIntensityThreshold = 100
   };
   

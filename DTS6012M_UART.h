@@ -104,8 +104,8 @@ struct DTSConfig {
   unsigned long baudRate = 921600;
   unsigned long timeout_ms = 1000;
   bool crcEnabled = true;
-  uint16_t maxValidDistance_mm = 20000;
-  uint16_t minValidDistance_mm = 30;
+  uint16_t maxValidDistance_mm = 18000;  // Datasheet max range: 18m
+  uint16_t minValidDistance_mm = 20;     // Datasheet min range: 0.02m
   uint16_t minIntensityThreshold = 100;
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
   uint16_t crcAutoSwitchErrorThreshold = 100;

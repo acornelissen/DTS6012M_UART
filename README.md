@@ -148,8 +148,8 @@ struct DTSConfig {
   unsigned long baudRate = 921600;        // UART baud rate
   unsigned long timeout_ms = 1000;        // Communication timeout
   bool crcEnabled = true;                  // Enable CRC validation
-  uint16_t maxValidDistance_mm = 20000;    // Maximum valid distance
-  uint16_t minValidDistance_mm = 30;       // Minimum valid distance  
+  uint16_t maxValidDistance_mm = 18000;    // Maximum valid distance (datasheet: 18m)
+  uint16_t minValidDistance_mm = 20;       // Minimum valid distance (datasheet: 0.02m)  
   uint16_t minIntensityThreshold = 100;    // Minimum signal strength
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::MSB_THEN_LSB; // CRC byte order (datasheet default)
   uint16_t crcAutoSwitchErrorThreshold = 100; // AUTO mode threshold
@@ -409,7 +409,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.5.3 (Latest)
+### v2.5.4 (Latest)
+- 🔧 Aligned default distance limits with datasheet: `maxValidDistance_mm` 20000→18000 (max range 18m), `minValidDistance_mm` 30→20 (min range 0.02m)
+
+### v2.5.3
 - 🐛 Moved circular buffer reset into `resetFrameState()` — fixes stale-buffer bugs in `begin()`, `update()` timeout, `setBaudRate()` fallback, not just `sendOneShot()`
 - 🐛 Fixed `setBaudRate()` fallback paths: now resets frame state and updates `_lastValidFrameTime`
 
