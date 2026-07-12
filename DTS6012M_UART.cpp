@@ -20,6 +20,8 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
   _rxBufferIndex = 0;
   _circularBufferHead = 0;
   _circularBufferTail = 0;
+  _rxPin = -1;
+  _txPin = -1;
   _lastUpdateTime = 0;
   _lastValidFrameTime = 0;
   _historyIndex = 0;
@@ -72,22 +74,10 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPi
   // Use provided baud rate or config default
   unsigned long targetBaudRate = (baudRate == 0) ? _config.baudRate : baudRate;
 
-#if defined(DTS6012M_TEST_MODE)
-  (void)rxPin;
-  (void)txPin;
-  _serial.begin(targetBaudRate);
-#elif defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
-  // ESP32 cores support passing RX/TX pins directly to HardwareSerial::begin.
-  if (rxPin >= 0 || txPin >= 0) {
-    _serial.begin(targetBaudRate, SERIAL_8N1, rxPin, txPin);
-  } else {
-    _serial.begin(targetBaudRate);
-  }
-#else
-  (void)rxPin;
-  (void)txPin;
-  _serial.begin(targetBaudRate);
-#endif
+  // Remember the pins so later re-begin()s (configure/setBaudRate) keep them.
+  _rxPin = rxPin;
+  _txPin = txPin;
+  applySerialBegin(targetBaudRate);
 
   delay(10); // Allow serial port to stabilize
 
@@ -140,7 +130,8 @@ DTSResult DTS6012M_UART::update()
   
   // Drain circular buffer so _currentMeasurement always holds the freshest
   // reading, even when multiple frames have queued up at high frame rates.
-  DTSError lastParseError = DTSError::TIMEOUT;
+  // lastParseError stays NO_NEW_DATA unless an actual parse error occurs.
+  DTSError lastParseError = DTSError::NO_NEW_DATA;
   for (;;) {
     result = processCircularBuffer();
     if (result == DTSError::NONE) {
@@ -155,8 +146,8 @@ DTSResult DTS6012M_UART::update()
   }
 
   // Record a single error for the last failed parse (if any).
-  // Skip TIMEOUT — that just means no more data is buffered.
-  if (!newFrameReceived && lastParseError != DTSError::TIMEOUT) {
+  // Skip NO_NEW_DATA — that just means no complete frame was buffered this call.
+  if (!newFrameReceived && lastParseError != DTSError::NO_NEW_DATA) {
     _consecutiveErrors++;
     recordError(lastParseError);
   }
@@ -168,7 +159,9 @@ DTSResult DTS6012M_UART::update()
     return DTSResult(DTSError::TIMEOUT);
   }
 
-  // Return success only if new frame was processed
+  // NONE if a fresh frame was parsed; the parse error if one occurred; otherwise
+  // NO_NEW_DATA — benign "nothing new yet", distinct from a real comms TIMEOUT.
+  // All non-NONE values convert to false for the v1.x bool API.
   return DTSResult(newFrameReceived ? DTSError::NONE : lastParseError);
 }
 
@@ -350,7 +343,7 @@ DTSError DTS6012M_UART::configure(const DTSConfig &config)
   // Only reinitialize serial if baud rate actually changed
   if (_config.baudRate != oldBaudRate && _serial) {
     _serial.end();
-    _serial.begin(_config.baudRate);
+    applySerialBegin(_config.baudRate);
     delay(10);
 
     if (!_serial) {
@@ -416,7 +409,9 @@ DTSResult DTS6012M_UART::disableSensor()
 DTSError DTS6012M_UART::setFrameRate(uint16_t fps)
 {
   byte payload[2] = { static_cast<byte>((fps >> 8) & 0xFF), static_cast<byte>(fps & 0xFF) };
-  byte buf[16];
+  // Buffer sized to hold a full ACK frame so a larger-than-expected response is
+  // read completely, not falsely reported as truncated (TIMEOUT).
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
   int bytesRead = 0;
   return sendOneShot(DTSCommand::SET_FRAME_RATE, payload, 2,
                      buf, sizeof(buf), bytesRead, 500);
@@ -431,9 +426,11 @@ DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
   if (err != DTSError::NONE) return err;
 
   uint16_t dataLen = ((uint16_t)buf[5] << 8) | buf[6];
-  if (dataLen >= 2) {
-    fps = ((uint16_t)buf[7] << 8) | buf[8];
+  if (dataLen < 2) {
+    // Response carried no frame-rate value; don't report success with fps untouched.
+    return DTSError::FRAME_LENGTH_INVALID;
   }
+  fps = ((uint16_t)buf[7] << 8) | buf[8];
   return DTSError::NONE;
 }
 
@@ -466,13 +463,13 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
   // Wait for sensor to process, then switch local serial
   delay(50);
   _serial.end();
-  _serial.begin(newBaudRate);
+  applySerialBegin(newBaudRate);
   delay(10);
 
   if (!_serial) {
     // Fall back to old baud rate
     _serial.end();
-    _serial.begin(oldBaudRate);
+    applySerialBegin(oldBaudRate);
     delay(10);
     resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
@@ -498,7 +495,7 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
   if (!gotFrame) {
     // Revert to old baud rate
     _serial.end();
-    _serial.begin(oldBaudRate);
+    applySerialBegin(oldBaudRate);
     delay(10);
     resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
@@ -526,7 +523,9 @@ DTSError DTS6012M_UART::writeIICRegister(byte regAddr, const byte *data, uint8_t
   if (data != nullptr && length > 0) {
     memcpy(&payload[2], data, length);
   }
-  byte buf[16];
+  // Buffer sized to hold a full ACK frame so a larger-than-expected response is
+  // read completely, not falsely reported as truncated (TIMEOUT).
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
   int bytesRead = 0;
   return sendOneShot(DTSCommand::WRITE_IIC_REG, payload, length + 2,
                      buf, sizeof(buf), bytesRead, 500);
@@ -1109,7 +1108,8 @@ uint16_t DTS6012M_UART::applyCalibratedDistance(uint16_t rawDistance) const
 
 DTSError DTS6012M_UART::processCircularBuffer()
 {
-  DTSError lastError = DTSError::TIMEOUT;
+  // NO_NEW_DATA (not an error) unless we actually attempt and fail a parse.
+  DTSError lastError = DTSError::NO_NEW_DATA;
   // Look for frame header in circular buffer
   while (_circularBufferTail != _circularBufferHead) {
     byte currentByte = _circularBuffer[_circularBufferTail];
@@ -1131,23 +1131,25 @@ DTSError DTS6012M_UART::processCircularBuffer()
           if (_rxBufferIndex >= DTS_RESPONSE_FRAME_LENGTH) {
             _frameState = FrameState::FRAME_COMPLETE;
             DTSError result = parseFrame();
-            resetFrameState();
-            
+            // Parse-only reset: preserve the circular buffer so the update()
+            // drain loop can keep consuming any frames queued behind this one.
+            resetParseState();
+
             if (result == DTSError::NONE) {
               return DTSError::NONE;
             }
             lastError = result;
           }
         } else {
-          // Buffer overflow - reset and try again
-          resetFrameState();
+          // Buffer overflow - reset parse state and try again (keep buffered bytes)
+          resetParseState();
           return DTSError::BUFFER_OVERFLOW;
         }
         break;
-        
+
       case FrameState::FRAME_COMPLETE:
         // Should not reach here
-        resetFrameState();
+        resetParseState();
         break;
     }
   }
@@ -1155,10 +1157,37 @@ DTSError DTS6012M_UART::processCircularBuffer()
   return lastError;
 }
 
-void DTS6012M_UART::resetFrameState()
+void DTS6012M_UART::applySerialBegin(unsigned long baudRate)
+{
+#if defined(DTS6012M_TEST_MODE)
+  // Host tests exercise the pin-forwarding path through a recording stub.
+  if (_rxPin >= 0 || _txPin >= 0) {
+    _serial.begin(baudRate, _rxPin, _txPin);
+  } else {
+    _serial.begin(baudRate);
+  }
+#elif defined(ESP32) || defined(ARDUINO_ARCH_ESP32)
+  // ESP32 cores support passing RX/TX pins directly to HardwareSerial::begin.
+  if (_rxPin >= 0 || _txPin >= 0) {
+    _serial.begin(baudRate, SERIAL_8N1, _rxPin, _txPin);
+  } else {
+    _serial.begin(baudRate);
+  }
+#else
+  // Other cores map UART pins at the board level; baud is all we can set.
+  _serial.begin(baudRate);
+#endif
+}
+
+void DTS6012M_UART::resetParseState()
 {
   _frameState = FrameState::WAITING_FOR_HEADER;
   _rxBufferIndex = 0;
+}
+
+void DTS6012M_UART::resetFrameState()
+{
+  resetParseState();
   _circularBufferHead = 0;
   _circularBufferTail = 0;
 }
@@ -1237,6 +1266,19 @@ void DTS6012M_UART::resetCRCByteOrderState()
   setCRCByteOrder(_config.crcByteOrder);
 }
 
+// Decode the 2-byte CRC field at buf[offset..offset+1] per byte order. Matches
+// extractFrameCRC(): MSB_THEN_LSB treats the first wire byte as the high byte;
+// LSB_THEN_MSB treats the second wire byte as the high byte.
+static uint16_t decodeResponseCRC(const byte *buf, int offset, DTSCRCByteOrder order)
+{
+  byte first = buf[offset];
+  byte second = buf[offset + 1];
+  if (order == DTSCRCByteOrder::MSB_THEN_LSB) {
+    return ((uint16_t)first << 8) | second;
+  }
+  return ((uint16_t)second << 8) | first;
+}
+
 DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_t payloadLen,
                                      byte *responseBuf, int responseBufSize, int &bytesRead,
                                      unsigned long timeout_ms)
@@ -1303,21 +1345,37 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     }
     bytesRead = idx;
 
-    // Validate CRC if we got the full frame (data + 2 CRC bytes)
-    if (bytesRead >= 7 + (int)dataLen + 2 && _config.crcEnabled) {
+    // A short read means the response was truncated (timed out mid-frame, or the
+    // frame is larger than the caller's buffer). We can't validate or trust a
+    // partial frame, so report failure instead of returning success with garbage.
+    if (bytesRead < 7 + (int)dataLen + 2) {
+      sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+      _lastValidFrameTime = millis();
+      return DTSError::TIMEOUT;
+    }
+
+    // Validate CRC over the complete frame (data + 2 CRC bytes)
+    if (_config.crcEnabled) {
       int frameWithoutCRC = 7 + dataLen;
       uint16_t calcCRC = calculateCRC16(responseBuf, frameWithoutCRC);
 
-      byte crcHi = responseBuf[frameWithoutCRC];
-      byte crcLo = responseBuf[frameWithoutCRC + 1];
-      uint16_t recvCRC;
-      if (_activeCRCByteOrder == DTSCRCByteOrder::MSB_THEN_LSB) {
-        recvCRC = ((uint16_t)crcHi << 8) | crcLo;
-      } else {
-        recvCRC = ((uint16_t)crcLo << 8) | crcHi;
+      bool crcOk = (calcCRC == decodeResponseCRC(responseBuf, frameWithoutCRC, _activeCRCByteOrder));
+
+      // AUTO: if the active order fails, try the other order and adopt it on a
+      // match — same policy as the streaming path's validateFrameCRC(). Without
+      // this, one-shot commands never succeed on an LSB-CRC sensor in AUTO mode.
+      if (!crcOk && _crcByteOrderMode == DTSCRCByteOrder::AUTO) {
+        DTSCRCByteOrder alt = (_activeCRCByteOrder == DTSCRCByteOrder::LSB_THEN_MSB)
+                                  ? DTSCRCByteOrder::MSB_THEN_LSB
+                                  : DTSCRCByteOrder::LSB_THEN_MSB;
+        if (calcCRC == decodeResponseCRC(responseBuf, frameWithoutCRC, alt)) {
+          _activeCRCByteOrder = alt;
+          _crcErrorStreak = 0;
+          crcOk = true;
+        }
       }
 
-      if (calcCRC != recvCRC) {
+      if (!crcOk) {
         sendCommand(DTSCommand::START_STREAM, nullptr, 0);
         _lastValidFrameTime = millis();
         return DTSError::CRC_CHECK_FAILED;

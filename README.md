@@ -170,17 +170,21 @@ enum class DTSError : byte {
   FRAME_LENGTH_INVALID = 0x03,    // Invalid frame length
   CRC_CHECK_FAILED = 0x04,        // CRC validation failed
   BUFFER_OVERFLOW = 0x05,         // Buffer overflow detected
-  TIMEOUT = 0x06,                 // Communication timeout
+  TIMEOUT = 0x06,                 // Communication timeout (no valid frame in timeout_ms)
   INVALID_COMMAND = 0x07,         // Invalid command parameter
-  UNSUPPORTED_OPERATION = 0x08    // Feature not implemented by sensor firmware
+  UNSUPPORTED_OPERATION = 0x08,   // Feature not implemented by sensor firmware
+  NO_NEW_DATA = 0x09              // Benign: no complete frame available this update() call
 };
 
 // Error handling example
 DTSError result = sensor.update();
-if (result != DTSError::NONE) {
+if (result == DTSError::NONE) {
+  // New measurement is ready.
+} else if (result != DTSError::NO_NEW_DATA) {
+  // NO_NEW_DATA is benign (loop() polls faster than frames arrive); everything
+  // else is a real fault worth handling.
   Serial.print("Error: ");
   Serial.println(static_cast<int>(result));
-  // Handle error appropriately
 }
 ```
 
@@ -409,7 +413,23 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.5.4 (Latest)
+### v2.6.0 (Latest)
+Frame-handling and one-shot correctness fixes, plus robustness follow-ups from a firmware-library review. Backward compatible: the public API is unchanged and every non-`NONE` result still converts to `false` for the v1.x `bool` API.
+
+Core bug fixes:
+- Fixed `update()` drain loop keeping the oldest frame instead of the freshest: `processCircularBuffer()` now uses a parse-only reset (`resetParseState()`) that clears the frame parser without wiping the circular buffer, so a single `update()` drains all queued frames and `_currentMeasurement` holds the newest. Restores the v2.4.0 drain behavior that the v2.5.3 `resetFrameState()` refactor regressed. Under load this stops frame drops, cuts latency, and fixes what `getFilteredDistance()`'s median spans.
+- Fixed `sendOneShot()` returning success on a truncated response: a read that ends before the full `7 + dataLen + 2` bytes now returns `TIMEOUT` instead of `NONE`, so `getFirmwareVersion()` / `getFrameRate()` / `readIICRegister()` no longer parse a partial buffer as valid.
+- Fixed `getFrameRate()` returning `NONE` when it could not parse the rate: a response with `dataLen < 2` now returns `FRAME_LENGTH_INVALID` (previously left `fps` untouched and reported success).
+- Enlarged the `setFrameRate()` and `writeIICRegister()` response buffers (16 → 64 bytes) so an ACK frame larger than 16 bytes is read in full instead of tripping the new truncation guard and returning a false `TIMEOUT`.
+
+Robustness follow-ups:
+- Added `DTSError::NO_NEW_DATA` (0x09) so `update()` distinguishes the benign "no complete frame yet this call" case from a real comms `TIMEOUT`. Previously the benign case returned `TIMEOUT`, which made the `AdvancedFeatures` and `ErrorHandlingDemo` examples treat a healthy sensor as failing. `NO_NEW_DATA` converts to `false` like the old return, so `bool`-style callers are unaffected; both examples now handle it explicitly.
+- `sendOneShot()` now applies the same AUTO CRC byte-order switch/retry as the streaming path, so one-shot commands work on `LSB_THEN_MSB` sensor variants in `AUTO` mode instead of always returning `CRC_CHECK_FAILED`.
+- Custom RX/TX pins passed to `begin()` are now stored and reused by `configure()` and `setBaudRate()` (via a shared `applySerialBegin()` helper), so re-opening the port on ESP32 no longer reverts to the default pins.
+- The host test harness now exits non-zero when any test fails (previously always exited 0), matching TESTING.md so CI actually catches regressions.
+- Added tests for all of the above: freshest-wins drain, truncated one-shot, unparseable frame rate, oversized ACKs, `NO_NEW_DATA` vs real `TIMEOUT`, one-shot AUTO CRC switch, and ESP32 pin persistence (72 tests, all passing).
+
+### v2.5.4
 - 🔧 Aligned default distance limits with datasheet: `maxValidDistance_mm` 20000→18000 (max range 18m), `minValidDistance_mm` 30→20 (min range 0.02m)
 
 ### v2.5.3

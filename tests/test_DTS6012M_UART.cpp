@@ -9,14 +9,27 @@ private:
   int _mockBufferIndex;
   int _mockReadIndex;
   bool _isAvailable;
-  
+
 public:
-  MockSerial() : _mockBufferIndex(0), _mockReadIndex(0), _isAvailable(true) {}
-  
+  // Records the pins from the most recent begin(): -1 when begun without pins.
+  int lastRxPin;
+  int lastTxPin;
+
+  MockSerial() : _mockBufferIndex(0), _mockReadIndex(0), _isAvailable(true),
+                 lastRxPin(-1), lastTxPin(-1) {}
+
   void begin(unsigned long) override {
     _isAvailable = true;
+    lastRxPin = -1;
+    lastTxPin = -1;
   }
-  
+
+  void begin(unsigned long, int8_t rxPin, int8_t txPin) override {
+    _isAvailable = true;
+    lastRxPin = rxPin;
+    lastTxPin = txPin;
+  }
+
   void end() override {
     _isAvailable = false;
   }
@@ -83,6 +96,50 @@ public:
   int getSentDataLength() { return _mockBufferIndex; }
 };
 
+// Mock that emulates the sensor's request/response behavior for sendOneShot().
+// A programmed response is queued into the RX FIFO only when the matching
+// command frame is written, so the initial buffer flush in sendOneShot() does
+// not consume it. This mirrors real hardware and avoids the shared TX/RX buffer
+// echo that the simpler MockSerial exhibits.
+class OneShotMockSerial : public HardwareSerial {
+private:
+  byte _rx[128];
+  int _rxHead;
+  int _rxTail;
+  byte _response[64];
+  int _responseLen;
+  byte _respondToCmd;
+
+public:
+  OneShotMockSerial() : _rxHead(0), _rxTail(0), _responseLen(0), _respondToCmd(0) {}
+
+  // Program the response delivered when a frame for command `cmd` is written.
+  void setResponse(byte cmd, const byte *data, int len) {
+    _respondToCmd = cmd;
+    _responseLen = (len < static_cast<int>(sizeof(_response))) ? len : static_cast<int>(sizeof(_response));
+    for (int i = 0; i < _responseLen; i++) {
+      _response[i] = data[i];
+    }
+  }
+
+  int available() override { return _rxTail - _rxHead; }
+  int read() override { return (_rxHead < _rxTail) ? _rx[_rxHead++] : -1; }
+  int peek() override { return (_rxHead < _rxTail) ? _rx[_rxHead] : -1; }
+  size_t write(uint8_t) override { return 1; }
+
+  size_t write(const uint8_t *buffer, size_t size) override {
+    // A full command frame starts with the header byte; buffer[3] is the command.
+    if (size >= 4 && buffer[0] == DTS_HEADER && buffer[3] == _respondToCmd) {
+      for (int i = 0; i < _responseLen && _rxTail < static_cast<int>(sizeof(_rx)); i++) {
+        _rx[_rxTail++] = _response[i];
+      }
+    }
+    return size;
+  }
+
+  operator bool() const override { return true; }
+};
+
 // Test framework
 class TestFramework {
 private:
@@ -134,6 +191,8 @@ public:
     Serial.println(" total tests");
     Serial.println("==========================================");
   }
+
+  int failedCount() const { return _failedTests; }
 };
 
 // Global test framework instance
@@ -641,6 +700,212 @@ void testResetAndFactoryBehavior() {
   testFramework.assertEqual(static_cast<int>(DTSError::UNSUPPORTED_OPERATION), static_cast<int>(result), "factoryReset reports unsupported");
 }
 
+void testDrainFreshestFrame() {
+  Serial.println("Running Drain Freshest Frame Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();   // zero the statistics so measurementCount is a clean drop counter
+  mockSerial.resetMock();
+
+  // Three back-to-back valid frames with distinct primary distances.
+  uint16_t distances[3] = {1000, 1500, 2000};
+  byte batch[69];
+  for (int i = 0; i < 3; i++) {
+    byte *f = batch + i * 23;
+    createValidFrame(f);
+    f[13] = distances[i] & 0xFF;
+    f[14] = (distances[i] >> 8) & 0xFF;
+    updateFrameCRC(f);
+  }
+  mockSerial.mockIncomingData(batch, 69);
+
+  // A single update() must drain the whole batch.
+  DTSError result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "Drain: single update() succeeds with batched frames");
+
+  // Freshest (third) frame must win, not the oldest.
+  testFramework.assertEqual(2000, static_cast<int>(sensor.getDistance()), "Drain: getMeasurement returns freshest (3rd) frame");
+
+  // All three frames must be parsed — none silently discarded from the buffer.
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(3, static_cast<int>(stats.measurementCount), "Drain: all 3 batched frames parsed, none lost");
+}
+
+void testSendOneShotTruncatedResponse() {
+  Serial.println("Running One-Shot Truncated Response Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;   // isolate the truncation path from CRC validation
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Response claims dataLen=2 (needs 7+2+2=11 bytes) but only 8 arrive.
+  byte resp[8] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x02, 0xAA};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 8);
+
+  uint16_t fps = 0;
+  DTSError result = sensor.getFrameRate(fps, 50);
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT), static_cast<int>(result), "Truncated one-shot response returns TIMEOUT, not success");
+}
+
+void testGetFrameRateUnparseable() {
+  Serial.println("Running getFrameRate Unparseable Response Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Complete frame but dataLen=0 — no frame-rate value present to parse.
+  byte resp[9] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x00, 0x00, 0x00};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 9);
+
+  uint16_t fps = 0;
+  DTSError result = sensor.getFrameRate(fps, 50);
+  testFramework.assertTrue(result != DTSError::NONE, "getFrameRate reports error when dataLen < 2");
+}
+
+void testGetFrameRateSuccess() {
+  Serial.println("Running getFrameRate Success Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Valid response: dataLen=2, frame rate 10 fps (0x000A, MSB first in payload).
+  byte resp[11] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x02, 0x00, 0x0A, 0x00, 0x00};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 11);
+
+  uint16_t fps = 0;
+  DTSError result = sensor.getFrameRate(fps, 50);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "getFrameRate succeeds on a valid response");
+  testFramework.assertEqual(10, static_cast<int>(fps), "getFrameRate parses the frame-rate value");
+}
+
+void testSetFrameRateLargeAck() {
+  Serial.println("Running setFrameRate Large-ACK Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // ACK carries dataLen=8 → 17-byte frame, larger than the old 16-byte buffer.
+  // A correctly sized buffer must read it in full and report success, not a
+  // false TIMEOUT from the truncation guard.
+  byte resp[17] = {0xA5, 0x03, 0x20, 0x1A, 0x00, 0x00, 0x08,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  mock.setResponse(static_cast<byte>(DTSCommand::SET_FRAME_RATE), resp, 17);
+
+  DTSError result = sensor.setFrameRate(10);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "setFrameRate accepts an ACK larger than 16 bytes");
+}
+
+void testWriteIICRegisterLargeAck() {
+  Serial.println("Running writeIICRegister Large-ACK Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  byte resp[17] = {0xA5, 0x03, 0x20, 0x03, 0x00, 0x00, 0x08,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  mock.setResponse(static_cast<byte>(DTSCommand::WRITE_IIC_REG), resp, 17);
+
+  byte data[2] = {0xAB, 0xCD};
+  DTSError result = sensor.writeIICRegister(0x10, data, 2);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "writeIICRegister accepts an ACK larger than 16 bytes");
+}
+
+void testUpdateNoNewData() {
+  Serial.println("Running update() No-New-Data Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // No bytes available, but well within the timeout window (fresh from begin()).
+  // This must be reported as the benign NO_NEW_DATA, not a comms TIMEOUT.
+  DTSError result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NO_NEW_DATA), static_cast<int>(result), "update() reports NO_NEW_DATA when no frame is available (not TIMEOUT)");
+
+  // Must still read as false for the v1.x bool API (backward compatible).
+  DTSResult boolResult = sensor.update();
+  testFramework.assertTrue(!boolResult, "update() NO_NEW_DATA converts to false for the bool API");
+
+  // No error should be recorded for the benign no-data case.
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(0, static_cast<int>(stats.errorCount), "update() NO_NEW_DATA records no error");
+}
+
+void testUpdateRealTimeout() {
+  Serial.println("Running update() Real-Timeout Tests...");
+
+  DTSConfig config;
+  config.timeout_ms = 1;   // 1 ms window so a short delay is a genuine timeout
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  mockSerial.resetMock();
+
+  delay(5);   // exceed the timeout window with no incoming frames
+  DTSError result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT), static_cast<int>(result), "update() still reports TIMEOUT after a real comms stall");
+}
+
+void testOneShotAutoCRCSwitch() {
+  Serial.println("Running One-Shot AUTO CRC Switch Tests...");
+
+  DTSConfig config;
+  config.crcEnabled = true;
+  config.crcByteOrder = DTSCRCByteOrder::AUTO;   // starts at MSB_THEN_LSB
+  OneShotMockSerial mock;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Valid GET_FRAME_RATE response (dataLen=2, fps=10) but with an LSB-ordered CRC.
+  byte resp[11] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x02, 0x00, 0x0A, 0x00, 0x00};
+  uint16_t crc = calculateTestCRC16(resp, 9);   // CRC over 7 header + 2 data bytes
+  resp[9] = crc & 0xFF;          // LSB first
+  resp[10] = (crc >> 8) & 0xFF;  // MSB second
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 11);
+
+  uint16_t fps = 0;
+  DTSError result = sensor.getFrameRate(fps, 50);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result), "One-shot AUTO CRC accepts LSB-ordered response by switching order");
+  testFramework.assertEqual(10, static_cast<int>(fps), "One-shot AUTO CRC parses fps after switching");
+  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::LSB_THEN_MSB), static_cast<int>(sensor.getActiveCRCByteOrder()), "One-shot AUTO adopts LSB->MSB order after success");
+}
+
+void testEsp32PinPersistence() {
+  Serial.println("Running ESP32 Pin Persistence Tests...");
+
+  MockSerial mock;   // local instance records begin() pins
+  DTSConfig config;
+  DTS6012M_UART sensor(mock, config);
+
+  // begin() with explicit RX/TX pins must forward them.
+  sensor.begin(0, 16, 17);
+  testFramework.assertEqual(16, mock.lastRxPin, "begin() forwards RX pin");
+  testFramework.assertEqual(17, mock.lastTxPin, "begin() forwards TX pin");
+
+  // A configure() that changes the baud rate re-opens the port; it must reuse
+  // the stored pins, not silently drop back to core defaults.
+  DTSConfig changed = config;
+  changed.baudRate = 115200;
+  sensor.configure(changed);
+  testFramework.assertEqual(16, mock.lastRxPin, "configure() re-begin preserves RX pin");
+  testFramework.assertEqual(17, mock.lastTxPin, "configure() re-begin preserves TX pin");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -663,7 +928,17 @@ void runAllTests() {
   testFilteredDistance();
   testPartialFrameDelivery();
   testResetAndFactoryBehavior();
-  
+  testDrainFreshestFrame();
+  testSendOneShotTruncatedResponse();
+  testGetFrameRateUnparseable();
+  testGetFrameRateSuccess();
+  testSetFrameRateLargeAck();
+  testWriteIICRegisterLargeAck();
+  testUpdateNoNewData();
+  testUpdateRealTimeout();
+  testOneShotAutoCRCSwitch();
+  testEsp32PinPersistence();
+
   testFramework.printSummary();
 }
 
@@ -683,6 +958,7 @@ void loop() {
 #ifndef ARDUINO
 int main() {
   setup();
-  return 0;
+  // Non-zero exit on any failure so CI (and TESTING.md's claim) actually hold.
+  return testFramework.failedCount() > 0 ? 1 : 0;
 }
 #endif

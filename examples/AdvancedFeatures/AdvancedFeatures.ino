@@ -109,7 +109,12 @@ void loop() {
         lastPrintTime = currentTime;
       }
       break;
-      
+
+    case DTSError::NO_NEW_DATA:
+      // No complete frame this iteration. Normal whenever loop() polls faster
+      // than the sensor's frame rate. Not a fault — do nothing and keep polling.
+      break;
+
     case DTSError::TIMEOUT:
       // Handle timeout - sensor may be disconnected or not responding
       consecutiveErrors++;

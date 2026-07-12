@@ -12,6 +12,8 @@ class HardwareSerial : public Stream {
 public:
   virtual void begin(unsigned long) {}
   virtual void begin(unsigned long, uint16_t) {}
+  // Pin-aware begin so host tests can verify RX/TX pins survive a re-begin().
+  virtual void begin(unsigned long, int8_t, int8_t) {}
   virtual void end() {}
   virtual int available() override = 0;
   virtual int read() override = 0;
@@ -80,7 +82,11 @@ enum class DTSError : byte {
   BUFFER_OVERFLOW = 0x05,
   TIMEOUT = 0x06,
   INVALID_COMMAND = 0x07,
-  UNSUPPORTED_OPERATION = 0x08
+  UNSUPPORTED_OPERATION = 0x08,
+  // Benign: update() ran but no complete frame was available yet. Distinct from
+  // TIMEOUT (a real comms stall). Converts to false via DTSResult, like the old
+  // no-data return, so v1.x bool-style callers are unaffected.
+  NO_NEW_DATA = 0x09
 };
 
 // Data quality indicators
@@ -479,6 +485,11 @@ private:
   int _circularBufferTail;
   unsigned long _lastUpdateTime;
   unsigned long _lastValidFrameTime;
+
+  // RX/TX pins captured at begin() so re-begin() (configure/setBaudRate) keeps
+  // them on cores that support pin remapping (ESP32). -1 = use core defaults.
+  int8_t _rxPin;
+  int8_t _txPin;
   
   // Pre-allocated command frame buffer
   byte _commandFrame[DTS_MAX_COMMAND_FRAME_SIZE];
@@ -546,15 +557,30 @@ private:
   uint16_t applyCalibratedDistance(uint16_t rawDistance) const;
 
   /**
+   * @brief (Re)open the serial port at the given baud, reusing the stored
+   * RX/TX pins on cores that support them. Centralizes the platform-specific
+   * HardwareSerial::begin() variants used by begin()/configure()/setBaudRate().
+   */
+  void applySerialBegin(unsigned long baudRate);
+
+  /**
    * @brief Process circular buffer for frame synchronization
    * @return DTSError::NONE if frame found, error code otherwise
    */
   DTSError processCircularBuffer();
 
   /**
-   * @brief Reset frame parsing state machine
+   * @brief Reset frame parsing state machine and clear the circular buffer.
+   * Use at synchronization boundaries (begin, timeout, baud change, one-shot).
    */
   void resetFrameState();
+
+  /**
+   * @brief Reset only the frame parse state (frame state machine + rx index).
+   * Leaves the circular buffer pointers intact so a single update() can keep
+   * draining queued frames. Used by processCircularBuffer() between frames.
+   */
+  void resetParseState();
 
   /**
    * @brief Check for communication timeout

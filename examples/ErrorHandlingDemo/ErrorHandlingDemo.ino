@@ -192,7 +192,12 @@ void handleNormalOperation() {
     case DTSError::BUFFER_OVERFLOW:
       handleError(result, "Buffer overflow - data rate too high");
       break;
-      
+
+    case DTSError::NO_NEW_DATA:
+      // No frame ready yet this poll — benign, not a fault. Don't count it as an
+      // error (doing so would drive spurious DEGRADED/RECOVERY transitions).
+      break;
+
     default:
       handleError(result, "Unknown error");
       break;
@@ -217,8 +222,10 @@ void handleDegradedOperation() {
     } else {
       printMeasurement();
     }
-  } else {
-    // Still having errors in degraded mode
+  } else if (result != DTSError::NO_NEW_DATA) {
+    // Still having real errors in degraded mode. NO_NEW_DATA is benign (just no
+    // frame ready this poll) and must not count, or it would escalate a healthy
+    // sensor to RECOVERY between frames.
     errorState.errorCount++;
     if (errorState.errorCount > 20) {
       Serial.println("Too many errors in degraded mode - entering RECOVERY");
