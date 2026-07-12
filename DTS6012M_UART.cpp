@@ -22,7 +22,6 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
   _circularBufferTail = 0;
   _rxPin = -1;
   _txPin = -1;
-  _lastUpdateTime = 0;
   _lastValidFrameTime = 0;
   _historyIndex = 0;
   _lastError = DTSError::NONE;
@@ -90,7 +89,6 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPi
   // Reset state and buffers
   resetFrameState();
   resetCRCByteOrderState();
-  _lastUpdateTime = millis();
   _lastValidFrameTime = millis();
   
   // Send start stream command
@@ -114,17 +112,19 @@ DTSResult DTS6012M_UART::update()
   bool newFrameReceived = false;
 
   // Process all available bytes using circular buffer
+  bool bufferOverflowed = false;
   while (_serial.available() > 0) {
     byte incomingByte = _serial.read();
-    _lastUpdateTime = millis();
-    
+
     // Store in circular buffer
     _circularBuffer[_circularBufferHead] = incomingByte;
     _circularBufferHead = (_circularBufferHead + 1) % DTS_CIRCULAR_BUFFER_SIZE;
-    
-    // Prevent buffer overflow by advancing tail if needed
+
+    // Ring full: advancing the tail drops the oldest unparsed byte, which can
+    // desync frame alignment. Flag it so the loss is reported, not silent.
     if (_circularBufferHead == _circularBufferTail) {
       _circularBufferTail = (_circularBufferTail + 1) % DTS_CIRCULAR_BUFFER_SIZE;
+      bufferOverflowed = true;
     }
   }
   
@@ -150,6 +150,13 @@ DTSResult DTS6012M_UART::update()
   if (!newFrameReceived && lastParseError != DTSError::NO_NEW_DATA) {
     _consecutiveErrors++;
     recordError(lastParseError);
+  }
+
+  // Report a ring overflow (oldest bytes were dropped this call). Record it even
+  // when a frame still parsed, so the data loss is visible via getLastError()
+  // and the statistics error count rather than being dropped silently.
+  if (bufferOverflowed) {
+    recordError(DTSError::BUFFER_OVERFLOW);
   }
 
   // Check for communication timeout (no valid frame in a long time)
@@ -614,6 +621,8 @@ uint16_t DTS6012M_UART::getFilteredDistance() const
     valid[j + 1] = key;
   }
 
+  // Upper-middle element for even counts (not the mean of the two middles) —
+  // avoids averaging two possibly-distant readings on a small embedded buffer.
   return valid[count / 2];
 }
 
@@ -631,6 +640,11 @@ void DTS6012M_UART::resetStatistics()
 DTSError DTS6012M_UART::getLastError() const
 {
   return _lastError;
+}
+
+uint16_t DTS6012M_UART::getConsecutiveErrors() const
+{
+  return _consecutiveErrors;
 }
 
 void DTS6012M_UART::clearError()
@@ -743,8 +757,14 @@ void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payl
 
   uint16_t crc = calculateCRC16(frame, frameIndex);
   appendCommandCRC(frame, frameIndex, crc);
-  _serial.write(frame, frameIndex);
+  size_t bytesWritten = _serial.write(frame, frameIndex);
   free(frame);
+
+  // Report a short write like the enum overload does, so a truncated command
+  // on the large-payload path isn't silently dropped.
+  if (bytesWritten != static_cast<size_t>(frameIndex)) {
+    recordError(DTSError::SERIAL_INIT_FAILED);
+  }
 }
 
 // CRC-16/MODBUS Lookup Table
@@ -1081,7 +1101,9 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
       _statistics.maxDistance = measurement.primaryDistance_mm;
     }
     
-    // Incremental average: avg += (new - avg) / count  (overflow-safe, signed to handle new < avg)
+    // Incremental average: avg += (new - avg) / count  (overflow-safe, signed to handle new < avg).
+    // The int32 cast of measurementCount is safe until ~2.1 billion measurements
+    // (~248 days at 100 Hz); resetStatistics() well before then if it ever matters.
     int32_t delta = (int32_t)measurement.primaryDistance_mm - (int32_t)_statistics.avgDistance;
     _statistics.avgDistance = (uint32_t)((int32_t)_statistics.avgDistance + delta / (int32_t)_statistics.measurementCount);
   }

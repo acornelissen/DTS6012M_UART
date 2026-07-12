@@ -384,7 +384,7 @@ Test coverage includes:
 - **Fast mode**: 100-200 Hz (CRC disabled)
 
 ### Memory Usage
-- **RAM**: ~2KB (including buffers and statistics)
+- **RAM**: ~0.5KB per sensor instance (128-byte circular buffer, 10-frame history, command/frame buffers, statistics)
 - **Flash**: ~8KB (including lookup tables)
 
 ## Migration from v1.x
@@ -413,7 +413,16 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.6.0 (Latest)
+### v2.7.0 (Latest)
+Robustness and diagnostics cleanup from the firmware-library review (all backward compatible; public API only gains `getConsecutiveErrors()`).
+- Ring-buffer overflow in `update()` (more bytes arrive than the 128-byte buffer holds in one call, e.g. on ESP32 with infrequent polling) is now reported via `getLastError()` / statistics `errorCount` instead of silently dropping the oldest bytes.
+- Added `getConsecutiveErrors()` — exposes the consecutive-parse-error counter the library already tracks (resets on any valid frame), so sketches can drive recovery logic without re-counting.
+- Legacy `sendCommand(byte, ...)` large-payload (malloc) path now reports a short write, matching the enum overload.
+- Removed dead `_lastUpdateTime` bookkeeping.
+- Silenced the `-Wmacro-redefined` warning in the host test build; the harness now exits non-zero on failure (from v2.6.0).
+- Documentation: corrected the RAM figure (~0.5KB per instance, not ~2KB) and clarified the even-count median and `avgDistance` overflow bound.
+
+### v2.6.0
 Frame-handling and one-shot correctness fixes, plus robustness follow-ups from a firmware-library review. Backward compatible: the public API is unchanged and every non-`NONE` result still converts to `false` for the v1.x `bool` API.
 
 Core bug fixes:

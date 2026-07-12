@@ -1,5 +1,7 @@
 #include <Arduino.h>
+#ifndef DTS6012M_TEST_MODE
 #define DTS6012M_TEST_MODE
+#endif
 #include "DTS6012M_UART.h"
 
 // Mock Serial class for testing
@@ -137,6 +139,18 @@ public:
     return size;
   }
 
+  operator bool() const override { return true; }
+};
+
+// Mock whose block write always reports one byte short, to exercise short-write
+// error reporting on the legacy large-payload command path.
+class ShortWriteMockSerial : public HardwareSerial {
+public:
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  size_t write(uint8_t) override { return 0; }
+  size_t write(const uint8_t *, size_t size) override { return size > 0 ? size - 1 : 0; }
   operator bool() const override { return true; }
 };
 
@@ -906,6 +920,69 @@ void testEsp32PinPersistence() {
   testFramework.assertEqual(17, mock.lastTxPin, "configure() re-begin preserves TX pin");
 }
 
+void testCircularBufferOverflowReported() {
+  Serial.println("Running Circular Buffer Overflow Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Feed more bytes than the 128-byte ring can hold (127 usable) in one update().
+  byte flood[130];
+  for (int i = 0; i < 130; i++) flood[i] = 0x00;   // no valid header among them
+  mockSerial.mockIncomingData(flood, 130);
+
+  sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::BUFFER_OVERFLOW), static_cast<int>(sensor.getLastError()), "Ring overflow is reported via getLastError()");
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertTrue(stats.errorCount >= 1, "Ring overflow increments the error count");
+}
+
+void testConsecutiveErrorsCounter() {
+  Serial.println("Running getConsecutiveErrors Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  testFramework.assertEqual(0, static_cast<int>(sensor.getConsecutiveErrors()), "Consecutive errors start at zero");
+
+  // Two bad frames (invalid device number) in a row.
+  byte bad[23];
+  createValidFrame(bad);
+  bad[1] = 0xFF;
+  updateFrameCRC(bad);
+  mockSerial.mockIncomingData(bad, 23);
+  sensor.update();
+  mockSerial.mockIncomingData(bad, 23);
+  sensor.update();
+  testFramework.assertEqual(2, static_cast<int>(sensor.getConsecutiveErrors()), "Consecutive errors count two bad frames in a row");
+
+  // A valid frame resets the counter.
+  byte good[23];
+  createValidFrame(good);
+  mockSerial.mockIncomingData(good, 23);
+  sensor.update();
+  testFramework.assertEqual(0, static_cast<int>(sensor.getConsecutiveErrors()), "Consecutive errors reset after a valid frame");
+}
+
+void testLegacyLargePayloadShortWriteReported() {
+  Serial.println("Running Legacy Large-Payload Short-Write Tests...");
+
+  ShortWriteMockSerial mock;
+  DTS6012M_UART sensor(mock);
+  sensor.clearError();
+
+  // Payload > 23 bytes takes the malloc path; the mock reports a short write.
+  byte payload[24];
+  for (int i = 0; i < 24; i++) payload[i] = static_cast<byte>(i);
+  sensor.sendCommand(DTS_CMD_SET_FRAME_RATE, payload, 24);
+
+  testFramework.assertEqual(static_cast<int>(DTSError::SERIAL_INIT_FAILED), static_cast<int>(sensor.getLastError()), "Legacy large-payload short write is reported");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -938,6 +1015,9 @@ void runAllTests() {
   testUpdateRealTimeout();
   testOneShotAutoCRCSwitch();
   testEsp32PinPersistence();
+  testCircularBufferOverflowReported();
+  testConsecutiveErrorsCounter();
+  testLegacyLargePayloadShortWriteReported();
 
   testFramework.printSummary();
 }

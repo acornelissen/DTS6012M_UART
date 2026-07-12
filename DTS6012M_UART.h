@@ -451,7 +451,14 @@ public:
    * @return Most recent DTSError encountered
    */
   DTSError getLastError() const;
-  
+
+  /**
+   * @brief Number of consecutive update() calls that ended in a parse error.
+   * Reset to zero whenever a valid frame is parsed. Useful for driving
+   * recovery logic without tracking it in sketch code.
+   */
+  uint16_t getConsecutiveErrors() const;
+
   /**
    * @brief Clear error status
    */
@@ -483,7 +490,6 @@ private:
   int _rxBufferIndex;
   int _circularBufferHead;
   int _circularBufferTail;
-  unsigned long _lastUpdateTime;
   unsigned long _lastValidFrameTime;
 
   // RX/TX pins captured at begin() so re-begin() (configure/setBaudRate) keeps
