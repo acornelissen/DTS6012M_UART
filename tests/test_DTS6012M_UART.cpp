@@ -1458,6 +1458,91 @@ void testAvgDistanceDoesNotFreeze() {
                             "avgDistance is the exact running mean, not a frozen value");
 }
 
+void testQualityNoiseFloorRejectsWeakLongRange() {
+  Serial.println("Running Quality Noise-Floor Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // A long-range return (15000 mm, in range) with a tiny intensity (3). Without
+  // an absolute floor the inverse-square-scaled threshold drops well below 1, so
+  // intensity 3 would grade EXCELLENT/valid. The floor must make it POOR.
+  byte frame[23];
+  createValidFrame(frame);
+  frame[13] = 15000 & 0xFF; frame[14] = (15000 >> 8) & 0xFF; // distance 15000 mm
+  frame[17] = 0x03;         frame[18] = 0x00;                // intensity 3
+  updateFrameCRC(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+
+  testFramework.assertEqual(static_cast<int>(DataQuality::POOR), static_cast<int>(sensor.getDataQuality()),
+                            "Weak long-range return graded POOR by the noise floor");
+  testFramework.assertTrue(!sensor.isDataValid(), "Weak long-range return is not valid");
+}
+
+void testSunlightGate() {
+  Serial.println("Running Ambient-Light Gate Tests...");
+
+  // Default config (maxSunlightBase == 0) ignores ambient.
+  DTS6012M_UART base(mockSerial);
+  base.begin();
+  base.resetState();
+  mockSerial.resetMock();
+  byte frame[23];
+  createValidFrame(frame);
+  frame[17] = 0xC8; frame[18] = 0x00;  // strong intensity 200 -> would be GOOD/EXCELLENT
+  frame[19] = 0xC8; frame[20] = 0x00;  // sunlightBase 200
+  updateFrameCRC(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  base.update();
+  testFramework.assertTrue(base.getDataQuality() != DataQuality::POOR,
+                           "High ambient is ignored when the gate is disabled (default)");
+
+  // With the gate enabled and exceeded, the same frame is POOR.
+  DTSConfig config;
+  config.maxSunlightBase = 100;
+  DTS6012M_UART gated(mockSerial, config);
+  gated.begin();
+  gated.resetState();
+  mockSerial.resetMock();
+  mockSerial.mockIncomingData(frame, 23);
+  gated.update();
+  testFramework.assertEqual(static_cast<int>(DataQuality::POOR), static_cast<int>(gated.getDataQuality()),
+                            "Ambient above maxSunlightBase grades the frame POOR");
+}
+
+void testStatisticsExcludePoorReadings() {
+  Serial.println("Running Statistics POOR-Exclusion Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // One good in-range frame (1000 mm), then a too-close frame (10 mm, below the
+  // 20 mm minimum -> POOR). Only the good frame must count; the POOR reading
+  // must not pollute min/avg or the median filter.
+  byte good[23];
+  createValidFrame(good); // 1000 mm
+  mockSerial.mockIncomingData(good, 23);
+  sensor.update();
+
+  byte tooClose[23];
+  createValidFrame(tooClose);
+  tooClose[13] = 10; tooClose[14] = 0;   // 10 mm, below min range
+  updateFrameCRC(tooClose);
+  mockSerial.mockIncomingData(tooClose, 23);
+  sensor.update();
+
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(1, static_cast<int>(stats.measurementCount),
+                            "POOR (too-close) reading excluded from measurementCount");
+  testFramework.assertEqual(1000, static_cast<int>(stats.minDistance),
+                            "POOR reading does not corrupt minDistance");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1508,6 +1593,9 @@ void runAllTests() {
   testAutoCRCNoFlipOnGenuineCorruption();
   testGetFrameRateLargeAck();
   testAvgDistanceDoesNotFreeze();
+  testQualityNoiseFloorRejectsWeakLongRange();
+  testSunlightGate();
+  testStatisticsExcludePoorReadings();
 
   testFramework.printSummary();
 }

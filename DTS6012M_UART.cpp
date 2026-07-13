@@ -659,9 +659,12 @@ uint16_t DTS6012M_UART::getFilteredDistance() const
   uint16_t valid[DTS_HISTORY_BUFFER_SIZE];
   int count = 0;
   for (int i = 0; i < DTS_HISTORY_BUFFER_SIZE; i++) {
-    uint16_t d = _measurementHistory[i].primaryDistance_mm;
-    if (d != DTS_INVALID_DISTANCE) {
-      valid[count++] = d;
+    // Median over quality-valid, in-range samples only — a POOR/out-of-range
+    // reading would otherwise skew the filtered distance.
+    if (_measurementHistory[i].primaryDistance_mm != DTS_INVALID_DISTANCE &&
+        _measurementHistory[i].primaryQuality != DataQuality::INVALID &&
+        _measurementHistory[i].primaryQuality != DataQuality::POOR) {
+      valid[count++] = _measurementHistory[i].primaryDistance_mm;
     }
   }
 
@@ -1143,7 +1146,14 @@ DataQuality DTS6012M_UART::assessDataQuality(const DTSMeasurement &measurement) 
       measurement.primaryDistance_mm > _config.maxValidDistance_mm) {
     return DataQuality::POOR;
   }
-  
+
+  // Ambient-light gate (opt-in). High ambient collapses this sensor's usable
+  // range; when enabled, treat an over-threshold ambient reading as unreliable.
+  if (_config.maxSunlightBase > 0 &&
+      measurement.sunlightBase > _config.maxSunlightBase) {
+    return DataQuality::POOR;
+  }
+
   // Scale intensity threshold by distance squared (inverse square law).
   // A dim return at long range is physically expected — judge quality relative
   // to what the sensor can produce at that distance, not a flat near-range value.
@@ -1154,6 +1164,12 @@ DataQuality DTS6012M_UART::assessDataQuality(const DTSMeasurement &measurement) 
   if (scale > 1.0f) scale = 1.0f;  // Don't raise threshold for close-range targets
 
   float effectiveThreshold = static_cast<float>(_config.minIntensityThreshold) * scale;
+  // Clamp to an absolute noise floor. Without this, the scaled threshold falls
+  // below ~1 count past a few metres and any nonzero return grades EXCELLENT,
+  // making the quality API meaningless exactly where returns get marginal.
+  if (effectiveThreshold < static_cast<float>(_config.intensityNoiseFloor)) {
+    effectiveThreshold = static_cast<float>(_config.intensityNoiseFloor);
+  }
   float intensity = static_cast<float>(measurement.primaryIntensity);
 
   if (intensity < effectiveThreshold) {
@@ -1169,7 +1185,12 @@ DataQuality DTS6012M_UART::assessDataQuality(const DTSMeasurement &measurement) 
 
 void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
 {
-  if (measurement.primaryDistance_mm != DTS_INVALID_DISTANCE) {
+  // Only fold quality-valid, in-range readings into the statistics. A no-return
+  // sentinel, a too-close/too-far reading, or an under-threshold return (all
+  // graded POOR/INVALID) would otherwise pollute min/avg and inflate the count.
+  if (measurement.primaryDistance_mm != DTS_INVALID_DISTANCE &&
+      measurement.primaryQuality != DataQuality::INVALID &&
+      measurement.primaryQuality != DataQuality::POOR) {
     _statistics.measurementCount++;
     
     // Update min/max

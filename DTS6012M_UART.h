@@ -115,6 +115,17 @@ struct DTSConfig {
   uint16_t minIntensityThreshold = 100;
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::MSB_THEN_LSB;
   uint16_t crcAutoSwitchErrorThreshold = 100;
+  // Absolute noise floor for the distance-scaled intensity threshold. The
+  // inverse-square scaling drives the effective threshold below 1 count at long
+  // range, so without a floor almost any nonzero return grades EXCELLENT there
+  // (a glint or multipath ghost reported at top confidence). A return whose
+  // intensity is below this floor is POOR regardless of range.
+  uint16_t intensityNoiseFloor = 8;
+  // Ambient-light gate. 0 disables it (default, no behaviour change). If > 0, a
+  // frame whose sunlightBase exceeds this is graded POOR: high ambient collapses
+  // this sensor's usable range, so the field the sensor already reports is used
+  // to flag it. Tune to your optics; the datasheet gives no universal value.
+  uint16_t maxSunlightBase = 0;
 };
 
 
