@@ -444,7 +444,78 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.8.0 (Latest)
+### v3.0.0 (Latest)
+Major robustness, safety, and correctness release from a multi-reviewer audit.
+Public method signatures, `DTSError` values, and `DTSMeasurement`/`DTSStatistics`
+layouts are unchanged, and two new `DTSConfig` fields are appended (designated
+initializers keep compiling). Several **runtime behaviours changed**, so review
+before upgrading a pinned integration:
+
+Correctness / safety fixes:
+- **Timeout livelock fixed.** `update()` no longer wipes the ring and any
+  partial frame on every timed-out call, so a frame that spans several `update()`
+  calls (low baud) can complete and the driver recovers instead of staying in
+  `TIMEOUT` forever.
+- **Stale data invalidated on timeout.** After a comms timeout, `isDataValid()`
+  returns false and `getDistance()`/`getFilteredDistance()` return their
+  sentinels instead of reporting the last good frame indefinitely. *(Behaviour
+  change: consumers now correctly see "no valid data" during a stall.)*
+- **AVR out-of-bounds read fixed.** `sendOneShot()` frame-size math is computed
+  in 32-bit, so a corrupted response length no longer wraps 16-bit `int` on AVR
+  and drives an out-of-bounds read; it reports `TIMEOUT` instead.
+- **Frame resync.** A false `0xA5` from line noise is rejected within a couple of
+  bytes (incremental header validation) instead of consuming a full 23-byte
+  window and swallowing a genuine frame behind it.
+- **`enableSensor()` refreshes the timeout clock**, so re-enabling after a
+  standby longer than `timeout_ms` no longer produces a spurious `TIMEOUT`.
+- **AUTO CRC** adopts the alternate byte order only when it actually validates,
+  so a burst of genuine corruption no longer flips a correctly-configured sensor.
+- **`begin(baud)` records the baud**, so `setBaudRate()`'s failure-revert returns
+  to the rate the link is really running at.
+- **Timeouts and batched parse errors are now counted** in `errorCount` /
+  `getConsecutiveErrors()`. *(Behaviour change: `errorCount` now includes
+  timeouts.)*
+- **`sendOneShot()` restores the host's stream state** instead of always
+  restarting the stream, so a one-shot query while disabled no longer re-enables
+  the laser.
+- **`avgDistance`** is an exact 64-bit running mean (it no longer freezes), and
+  `getFrameRate()` uses a 64-byte response buffer (no false `TIMEOUT` on a large
+  ACK).
+
+Quality / robustness improvements:
+- Data-quality grading gains an absolute intensity noise floor
+  (`intensityNoiseFloor`) so weak long-range returns are no longer graded
+  EXCELLENT, plus an opt-in ambient-light gate (`maxSunlightBase`). Statistics
+  and the median filter now include only quality-valid, in-range readings.
+  *(Behaviour change: `measurementCount` excludes POOR/out-of-range frames.)*
+- `update()` interleaves reading and parsing, so a serial FIFO larger than the
+  128-byte ring (e.g. ESP32) is fully parsed instead of overwriting intact bytes.
+- Response wait loops call `yield()` (no more ESP8266 watchdog resets on long
+  timeouts).
+- Blocking response loops and the legacy large-payload command path are now
+  heap-free; identity calibration skips floating point; `DTS_CIRCULAR_BUFFER_SIZE`
+  and `DTS_HISTORY_BUFFER_SIZE` are overridable to shrink RAM.
+
+API additions (all source-compatible):
+- `getConfig()`, `getDistanceOffset()`, `getDistanceScale()` — read back what
+  the setters configured.
+- `peekNewData()` — non-destructive companion to `newDataAvailable()`.
+- `waitForSensor(timeout)` — confirm a sensor is actually connected after
+  `begin()`.
+- `getMeasurement().lastError` is now populated (was always `NONE`).
+
+Other:
+- `getSecondaryDistance()` reports `DTS_INVALID_DISTANCE` for a no-return
+  secondary (established in 2.8.0); gate on `hasSecondaryTarget()`, not a raw
+  `> 0` comparison.
+- Distance-range default clarified: the sensor is specified to 20 m;
+  `maxValidDistance_mm` defaults to a conservative 18000 (set to 20000 for full
+  range).
+- Docs and examples corrected (ErrorHandlingDemo quality comparison, BasicRead
+  poll cadence, host build instructions, success-rate formula, AVR baud caveat).
+- Added `keywords.txt`; 142 host tests, all passing.
+
+### v2.8.0
 Accuracy fixes from an MRF2 firmware accuracy review. Backward compatible; no public API changes, but three behavioural corrections callers should know about:
 - Raw distance 0 (a no-return frame; the sensor's minimum valid distance is 20 mm) is now reported as `DTS_INVALID_DISTANCE` instead of being scaled and offset into a plausible-looking reading at exactly the configured `setDistanceOffset()` distance.
 - `resetState()` and `clearError()` no longer wipe the AUTO CRC byte-order detection streak. Hosts that call them from error-recovery paths (typically every few CRC errors) could otherwise never reach the auto-switch threshold on an LSB-first sensor variant, recovery-looping forever. Byte-order detection now resets only in `begin()` and `setCRCByteOrder()`.
