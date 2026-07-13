@@ -290,7 +290,12 @@ DTSError DTS6012M_UART::parseFrame()
 
 DTSMeasurement DTS6012M_UART::getMeasurement() const
 {
-  return _currentMeasurement;
+  // Surface the current error in the struct's lastError field. It was otherwise
+  // only ever written NONE, so callers (and the AdvancedFeatures example) that
+  // read measurement.lastError always saw "no error".
+  DTSMeasurement m = _currentMeasurement;
+  m.lastError = _lastError;
+  return m;
 }
 
 uint16_t DTS6012M_UART::getDistance() const

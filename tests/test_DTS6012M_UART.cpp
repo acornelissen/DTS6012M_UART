@@ -1543,6 +1543,61 @@ void testStatisticsExcludePoorReadings() {
                             "POOR reading does not corrupt minDistance");
 }
 
+void testSecondaryDistanceSentinel() {
+  Serial.println("Running Secondary-Distance Sentinel Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // No secondary target (raw secondary distance 0). getSecondaryDistance() must
+  // report the INVALID sentinel — not 0, which a caller could mistake for a
+  // 0 mm reading — and hasSecondaryTarget() must be false.
+  byte frame[23];
+  createValidFrame(frame); // secondary distance/intensity default to 0
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE),
+                            static_cast<int>(sensor.getSecondaryDistance()),
+                            "No-target secondary reports the INVALID sentinel");
+  testFramework.assertTrue(!sensor.hasSecondaryTarget(), "No secondary target for raw 0");
+
+  // A genuine secondary at 500 mm, intensity 30, is reported normally.
+  createValidFrame(frame);
+  frame[7] = 0xF4; frame[8] = 0x01;   // secondary distance 500 (LSB first)
+  frame[11] = 0x1E; frame[12] = 0x00; // secondary intensity 30
+  updateFrameCRC(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertEqual(500, static_cast<int>(sensor.getSecondaryDistance()),
+                            "Genuine secondary distance reported");
+  testFramework.assertTrue(sensor.hasSecondaryTarget(), "Secondary target detected");
+}
+
+void testMeasurementLastErrorPopulated() {
+  Serial.println("Running Measurement lastError Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Drive a parse error, then confirm getMeasurement().lastError reflects it
+  // (the field used to be permanently NONE).
+  byte bad[23];
+  createValidFrame(bad);
+  bad[1] = 0xFF; // bad device number
+  updateFrameCRC(bad);
+  mockSerial.mockIncomingData(bad, 23);
+  sensor.update();
+
+  DTSMeasurement m = sensor.getMeasurement();
+  testFramework.assertEqual(static_cast<int>(sensor.getLastError()), static_cast<int>(m.lastError),
+                            "getMeasurement().lastError reflects the current error");
+  testFramework.assertTrue(m.lastError != DTSError::NONE, "lastError is populated after an error");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1596,6 +1651,8 @@ void runAllTests() {
   testQualityNoiseFloorRejectsWeakLongRange();
   testSunlightGate();
   testStatisticsExcludePoorReadings();
+  testSecondaryDistanceSentinel();
+  testMeasurementLastErrorPopulated();
 
   testFramework.printSummary();
 }
