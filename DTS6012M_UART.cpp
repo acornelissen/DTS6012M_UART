@@ -31,6 +31,8 @@ DTS6012M_UART::DTS6012M_UART(HardwareSerial &serialPort, const DTSConfig &config
                             ? DTSCRCByteOrder::MSB_THEN_LSB
                             : _config.crcByteOrder;
   _crcErrorStreak = 0;
+  _timedOut = false;
+  _streamEnabled = true;
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
   _frameState = FrameState::WAITING_FOR_HEADER;
@@ -86,10 +88,14 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPi
     return DTSResult(DTSError::SERIAL_INIT_FAILED);
   }
 
+  // Remember the baud we actually opened at, so setBaudRate()/configure() revert
+  // to a rate the link is really running at instead of the struct default.
+  _config.baudRate = targetBaudRate;
+
   // Reset state and buffers
   resetFrameState();
   resetCRCByteOrderState();
-  _lastValidFrameTime = millis();
+  markStreamActive();
   
   // Send start stream command
   DTSError result = sendCommand(DTSCommand::START_STREAM, nullptr, 0);
@@ -113,8 +119,10 @@ DTSResult DTS6012M_UART::update()
 
   // Process all available bytes using circular buffer
   bool bufferOverflowed = false;
+  bool readAny = false;
   while (_serial.available() > 0) {
     byte incomingByte = _serial.read();
+    readAny = true;
 
     // Store in circular buffer
     _circularBuffer[_circularBufferHead] = incomingByte;
@@ -136,7 +144,7 @@ DTSResult DTS6012M_UART::update()
     result = processCircularBuffer();
     if (result == DTSError::NONE) {
       newFrameReceived = true;
-      _lastValidFrameTime = millis();
+      markStreamActive();
       _consecutiveErrors = 0;
       _lastError = DTSError::NONE;
     } else {
@@ -145,11 +153,13 @@ DTSResult DTS6012M_UART::update()
     }
   }
 
-  // Record a single error for the last failed parse (if any).
-  // Skip NO_NEW_DATA — that just means no complete frame was buffered this call.
+  // Parse failures are recorded inside processCircularBuffer() at the moment
+  // they occur, so a corrupt frame batched with a good one in the same update()
+  // is still counted (previously the good frame's success suppressed it). Here
+  // we only need to advance the consecutive-error counter when this whole call
+  // produced no valid frame. NO_NEW_DATA is benign (nothing buffered yet).
   if (!newFrameReceived && lastParseError != DTSError::NO_NEW_DATA) {
     _consecutiveErrors++;
-    recordError(lastParseError);
   }
 
   // Report a ring overflow (oldest bytes were dropped this call). Record it even
@@ -161,8 +171,25 @@ DTSResult DTS6012M_UART::update()
 
   // Check for communication timeout (no valid frame in a long time)
   if (isTimeout()) {
-    _lastError = DTSError::TIMEOUT;
-    resetFrameState();
+    // Clear stale parse/buffer state ONLY when nothing arrived this call. If
+    // bytes are actively arriving (a frame reassembling across calls at low
+    // baud, where one frame spans several update()s), wiping here would discard
+    // the partial frame every call and the driver could never resync — a
+    // permanent-TIMEOUT livelock. Leave the buffer alone so the frame completes.
+    if (!readAny && !newFrameReceived) {
+      resetFrameState();
+    }
+
+    // Count the stall once per episode, not once per call, and route it through
+    // recordError() so a comms loss is visible in errorCount / consecutiveErrors
+    // like every other error class (it previously bypassed both).
+    if (!_timedOut) {
+      _timedOut = true;
+      _consecutiveErrors++;
+      recordError(DTSError::TIMEOUT);
+    } else {
+      _lastError = DTSError::TIMEOUT;
+    }
     return DTSResult(DTSError::TIMEOUT);
   }
 
@@ -405,7 +432,12 @@ uint16_t DTS6012M_UART::getCRCAutoSwitchErrorThreshold() const
 
 DTSResult DTS6012M_UART::enableSensor()
 {
-  return DTSResult(sendCommand(DTSCommand::START_STREAM, nullptr, 0));
+  DTSError err = sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  // Re-enabling after standby restarts the stream: refresh the timeout clock so
+  // the first update() after a >timeout_ms pause doesn't report a false TIMEOUT.
+  _streamEnabled = true;
+  markStreamActive();
+  return DTSResult(err);
 }
 
 DTSResult DTS6012M_UART::disableSensor()
@@ -414,6 +446,7 @@ DTSResult DTS6012M_UART::disableSensor()
   // standby; the camera may be pointing somewhere else entirely on wake, and a
   // stale median would report the previous subject for the first frames.
   clearMeasurementHistory();
+  _streamEnabled = false;
   return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
 }
 
@@ -484,7 +517,7 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
     delay(10);
     resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-    _lastValidFrameTime = millis();
+    markStreamActive();
     return DTSError::SERIAL_INIT_FAILED;
   }
 
@@ -510,13 +543,13 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
     delay(10);
     resetFrameState();
     sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-    _lastValidFrameTime = millis();
+    markStreamActive();
     return DTSError::TIMEOUT;
   }
 
   _config.baudRate = newBaudRate;
   resetFrameState();
-  _lastValidFrameTime = millis();
+  markStreamActive();
   return DTSError::NONE;
 }
 
@@ -1182,6 +1215,9 @@ DTSError DTS6012M_UART::processCircularBuffer()
             if (result == DTSError::NONE) {
               return DTSError::NONE;
             }
+            // Count every failed parse at the point of failure, so a corrupt
+            // frame is never masked by a good frame later in the same drain.
+            recordError(result);
             lastError = result;
           }
         } else {
@@ -1239,6 +1275,20 @@ void DTS6012M_UART::resetFrameState()
 bool DTS6012M_UART::isTimeout() const
 {
   return (millis() - _lastValidFrameTime) > _config.timeout_ms;
+}
+
+void DTS6012M_UART::markStreamActive()
+{
+  _lastValidFrameTime = millis();
+  _timedOut = false;
+}
+
+void DTS6012M_UART::restoreStreamAfterOneShot()
+{
+  if (_streamEnabled) {
+    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
+  }
+  markStreamActive();
 }
 
 void DTS6012M_UART::recordError(DTSError error)
@@ -1338,8 +1388,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
   // 3. Send the actual command
   DTSError err = sendCommand(cmd, payload, payloadLen);
   if (err != DTSError::NONE) {
-    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-    _lastValidFrameTime = millis();
+    restoreStreamAfterOneShot();
     return err;
   }
 
@@ -1393,8 +1442,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     // frame is larger than the caller's buffer). We can't validate or trust a
     // partial frame, so report failure instead of returning success with garbage.
     if (bytesRead < 7 + (int)dataLen + 2) {
-      sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-      _lastValidFrameTime = millis();
+      restoreStreamAfterOneShot();
       return DTSError::TIMEOUT;
     }
 
@@ -1420,20 +1468,17 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
       }
 
       if (!crcOk) {
-        sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-        _lastValidFrameTime = millis();
+        restoreStreamAfterOneShot();
         return DTSError::CRC_CHECK_FAILED;
       }
     }
 
-    // 5. Restart the measurement stream
-    sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-    _lastValidFrameTime = millis();
+    // 5. Restore the stream to the host's requested state and report success
+    restoreStreamAfterOneShot();
     return DTSError::NONE;
   }
 
-  // Timed out — restart stream anyway
-  sendCommand(DTSCommand::START_STREAM, nullptr, 0);
-  _lastValidFrameTime = millis();
+  // Timed out — restore the stream to the host's requested state anyway
+  restoreStreamAfterOneShot();
   return DTSError::TIMEOUT;
 }

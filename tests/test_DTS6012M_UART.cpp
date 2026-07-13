@@ -113,7 +113,13 @@ private:
   byte _respondToCmd;
 
 public:
-  OneShotMockSerial() : _rxHead(0), _rxTail(0), _responseLen(0), _respondToCmd(0) {}
+  // Counts command frames written for each command byte, so tests can assert
+  // whether the stream was (re)started.
+  int startStreamWrites;
+  int stopStreamWrites;
+
+  OneShotMockSerial() : _rxHead(0), _rxTail(0), _responseLen(0), _respondToCmd(0),
+                        startStreamWrites(0), stopStreamWrites(0) {}
 
   // Program the response delivered when a frame for command `cmd` is written.
   void setResponse(byte cmd, const byte *data, int len) {
@@ -131,9 +137,13 @@ public:
 
   size_t write(const uint8_t *buffer, size_t size) override {
     // A full command frame starts with the header byte; buffer[3] is the command.
-    if (size >= 4 && buffer[0] == DTS_HEADER && buffer[3] == _respondToCmd) {
-      for (int i = 0; i < _responseLen && _rxTail < static_cast<int>(sizeof(_rx)); i++) {
-        _rx[_rxTail++] = _response[i];
+    if (size >= 4 && buffer[0] == DTS_HEADER) {
+      if (buffer[3] == static_cast<byte>(DTSCommand::START_STREAM)) startStreamWrites++;
+      if (buffer[3] == static_cast<byte>(DTSCommand::STOP_STREAM)) stopStreamWrites++;
+      if (buffer[3] == _respondToCmd) {
+        for (int i = 0; i < _responseLen && _rxTail < static_cast<int>(sizeof(_rx)); i++) {
+          _rx[_rxTail++] = _response[i];
+        }
       }
     }
     return size;
@@ -1096,6 +1106,149 @@ void testMedianHistoryClearedByResetAndDisable() {
                             "disableSensor clears median history");
 }
 
+void testTimeoutLivelockRecovery() {
+  Serial.println("Running Timeout Livelock Recovery Tests...");
+
+  DTSConfig config;
+  config.timeout_ms = 1;   // tiny window: every poll during reassembly is "timed out"
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Enter a genuine timeout with no data.
+  delay(3);
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT), static_cast<int>(r),
+                            "Livelock: enters TIMEOUT after a stall");
+
+  // Sensor resumes but delivers a frame in <23-byte chunks, one per update(),
+  // while still inside the timeout window. The old code wiped the ring on every
+  // timed-out update() and could never reassemble; the fix leaves an actively
+  // arriving partial frame intact so it completes and the driver recovers.
+  byte frame[23];
+  createValidFrame(frame);
+  DTSError last = DTSError::TIMEOUT;
+  for (int off = 0; off < 23; off += 5) {
+    int n = (off + 5 <= 23) ? 5 : (23 - off);
+    delay(2);   // stay past the 1 ms timeout window on each call
+    mockSerial.mockIncomingData(frame + off, n);
+    last = sensor.update();
+  }
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(last),
+                            "Livelock: recovers once the chunked frame completes");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getDistance()),
+                            "Livelock: recovered frame parsed correctly");
+}
+
+void testTimeoutCountedInStatistics() {
+  Serial.println("Running Timeout Accounting Tests...");
+
+  DTSConfig config;
+  config.timeout_ms = 1;
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  delay(3);
+  sensor.update();   // first timed-out call: edge of the stall episode
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(1, static_cast<int>(stats.errorCount),
+                            "Timeout is counted in errorCount");
+  testFramework.assertEqual(1, static_cast<int>(sensor.getConsecutiveErrors()),
+                            "Timeout bumps consecutiveErrors");
+
+  // A second timed-out call in the same stall episode must NOT keep incrementing
+  // (one count per episode, not one per call).
+  delay(3);
+  sensor.update();
+  stats = sensor.getStatistics();
+  testFramework.assertEqual(1, static_cast<int>(stats.errorCount),
+                            "Timeout counted once per stall episode, not per call");
+}
+
+void testEnableSensorRefreshesTimeoutClock() {
+  Serial.println("Running enableSensor Timeout-Clock Tests...");
+
+  DTSConfig config;
+  config.timeout_ms = 5;
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Standby for longer than the timeout window, then re-enable.
+  sensor.disableSensor();
+  delay(10);
+  sensor.enableSensor();
+
+  // The first update() after re-enable must NOT report a spurious TIMEOUT from a
+  // healthy sensor — enableSensor() refreshes the timeout clock like begin() does.
+  DTSError r = sensor.update();
+  testFramework.assertTrue(r != DTSError::TIMEOUT,
+                           "enableSensor refreshes the timeout clock (no false TIMEOUT)");
+}
+
+void testBatchedParseErrorIsCounted() {
+  Serial.println("Running Batched Parse-Error Accounting Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // One corrupt frame (bad device number) immediately followed by a valid frame,
+  // delivered together in a single update() drain. The corrupt frame must still
+  // be counted even though the good frame that follows it parses successfully.
+  byte batch[46];
+  createValidFrame(batch);
+  batch[1] = 0xFF;                 // corrupt the first frame's device number
+  updateFrameCRC(batch);
+  createValidFrame(batch + 23);    // second frame is valid (1000 mm)
+  mockSerial.mockIncomingData(batch, 46);
+
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(r),
+                            "Batched drain returns NONE (a good frame parsed)");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getDistance()),
+                            "Freshest good frame wins in a mixed batch");
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(1, static_cast<int>(stats.errorCount),
+                            "Corrupt frame batched with a good frame is still counted");
+}
+
+void testOneShotRespectsDisabledStream() {
+  Serial.println("Running One-Shot Stream-State Restore Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Valid GET_FRAME_RATE response so the one-shot succeeds.
+  byte resp[11] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x02, 0x00, 0x0A, 0x00, 0x00};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 11);
+
+  // Host puts the sensor in standby, then issues a one-shot query.
+  sensor.disableSensor();
+  int startsBefore = mock.startStreamWrites;
+  uint16_t fps = 0;
+  sensor.getFrameRate(fps, 50);
+
+  // The one-shot must NOT have re-enabled the stream the host disabled.
+  testFramework.assertEqual(startsBefore, mock.startStreamWrites,
+                            "One-shot does not restart a host-disabled stream");
+
+  // While enabled, the same one-shot SHOULD restore the stream.
+  sensor.enableSensor();
+  startsBefore = mock.startStreamWrites;
+  sensor.getFrameRate(fps, 50);
+  testFramework.assertTrue(mock.startStreamWrites > startsBefore,
+                           "One-shot restarts the stream when the host had it enabled");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1134,6 +1287,11 @@ void runAllTests() {
   testRawZeroDistanceStaysInvalidWithOffset();
   testAutoCRCDetectionSurvivesHostRecovery();
   testMedianHistoryClearedByResetAndDisable();
+  testTimeoutLivelockRecovery();
+  testTimeoutCountedInStatistics();
+  testEnableSensorRefreshesTimeoutClock();
+  testBatchedParseErrorIsCounted();
+  testOneShotRespectsDisabledStream();
 
   testFramework.printSummary();
 }

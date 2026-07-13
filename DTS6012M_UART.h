@@ -513,6 +513,16 @@ private:
   DTSCRCByteOrder _crcByteOrderMode;
   DTSCRCByteOrder _activeCRCByteOrder;
   uint16_t _crcErrorStreak;
+
+  // True while update() is in a comms-timeout episode. Used to count a stall
+  // once (not once per call) and to gate the stale-buffer reset.
+  bool _timedOut;
+
+  // Tracks whether the host wants the measurement stream running. sendOneShot()
+  // stops the stream to talk to the sensor, then restores THIS state instead of
+  // unconditionally restarting — so a one-shot call made while the host had the
+  // sensor disabled (standby) does not silently re-enable the laser.
+  bool _streamEnabled;
   
   // Calibration parameters
   int16_t _distanceOffset_mm;
@@ -593,6 +603,20 @@ private:
    * @return true if timeout detected
    */
   bool isTimeout() const;
+
+  /**
+   * @brief Mark the link as live: refresh the timeout clock and clear the
+   * timeout episode flag. Call from every path that (re)starts the stream so a
+   * later update() doesn't spuriously report TIMEOUT from a healthy sensor.
+   */
+  void markStreamActive();
+
+  /**
+   * @brief Restore the stream after a one-shot command: restart it only if the
+   * host had it enabled, then refresh the timeout clock. Prevents a one-shot
+   * call from silently re-enabling a sensor the host put in standby.
+   */
+  void restoreStreamAfterOneShot();
 
   /**
    * @brief Record an error for diagnostics/statistics.
