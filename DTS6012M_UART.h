@@ -240,14 +240,18 @@ public:
   DTSMeasurement getMeasurement() const;
   
   /**
-   * @brief Get primary target distance with validation
-   * @return Distance in mm, DTS_INVALID_DISTANCE if invalid
+   * @brief Get primary target distance (mm).
+   * @return Distance in mm. Returns DTS_INVALID_DISTANCE only when the sensor
+   *         reported no return (raw 0/0xFFFF) or after a comms timeout. An
+   *         out-of-range or low-signal reading is still returned as a number —
+   *         check isDataValid()/getDataQuality() to reject those.
    */
   uint16_t getDistance() const;
-  
+
   /**
-   * @brief Get primary target intensity
-   * @return Intensity value, DTS_INVALID_INTENSITY if invalid
+   * @brief Get primary target intensity.
+   * @return Raw intensity. Not validity-gated; use isDataValid() to decide
+   *         whether the accompanying distance is trustworthy.
    */
   uint16_t getIntensity() const;
   

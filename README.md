@@ -35,6 +35,7 @@ This library is based on the DTS6012M User Manual V1.6 (dated 2024-07-26).
 * **DTS6012M Sensor Module:** The sensor this library is designed for.
 * **Arduino Board:** An Arduino board with at least one available **HardwareSerial** port (e.g., `Serial1`, `Serial2`). Examples include Arduino Mega, Arduino Due, ESP32, STM32-based boards, etc.
     * **Note:** The default sensor baud rate (921600 bps) is generally **too high** for SoftwareSerial libraries. Using a HardwareSerial port is strongly recommended.
+    * **8-bit AVR caveat (Uno/Mega/Nano):** A 16 MHz AVR UART **cannot** reach 921600 baud (the nearest divisor is ~1 Mbaud, an 8.5% error — every byte corrupts), so the default configuration will not work on those boards and `update()` will only ever report `TIMEOUT`. Use a 32-bit host (ESP32, STM32, RP2040, Due) for the default rate, or first lower the sensor's rate from a 32-bit host with `setBaudRate()` before wiring it to an AVR. There is no divisor that makes 921600 usable at 16 MHz.
 * **3.3V Power Supply:** The sensor requires a 3.3V supply for both Pin 1 (3V3_LASER) and Pin 2 (3V3). Ensure your Arduino can supply sufficient current or use an external 3.3V regulator.
 * **Jumper Wires:** For making connections.
 * **(Optional)** Logic Level Shifter (if connecting 5V Arduino TX to 3.3V sensor RX).
@@ -148,12 +149,24 @@ struct DTSConfig {
   unsigned long baudRate = 921600;        // UART baud rate
   unsigned long timeout_ms = 1000;        // Communication timeout
   bool crcEnabled = true;                  // Enable CRC validation
-  uint16_t maxValidDistance_mm = 18000;    // Maximum valid distance (datasheet: 18m)
-  uint16_t minValidDistance_mm = 20;       // Minimum valid distance (datasheet: 0.02m)  
+  uint16_t maxValidDistance_mm = 18000;    // Conservative default validity cap (see note)
+  uint16_t minValidDistance_mm = 20;       // Minimum valid distance
   uint16_t minIntensityThreshold = 100;    // Minimum signal strength
   DTSCRCByteOrder crcByteOrder = DTSCRCByteOrder::MSB_THEN_LSB; // CRC byte order (datasheet default)
   uint16_t crcAutoSwitchErrorThreshold = 100; // AUTO mode threshold
+  uint16_t intensityNoiseFloor = 8;        // Absolute floor for the distance-scaled intensity threshold
+  uint16_t maxSunlightBase = 0;            // 0 = off; if >0, frames with higher ambient are graded POOR
 };
+```
+
+> **Distance range note.** The DTS6012M is specified to a **20 m** maximum
+> range (public datasheet Docdt22 Rev1.2). `maxValidDistance_mm` defaults to a
+> conservative **18000** so readings in the least-accurate top band are graded
+> `POOR` by default; set it to `20000` to use the sensor's full specified range.
+> The 20 mm minimum is the library default; adjust `minValidDistance_mm` to your
+> optics.
+
+```cpp
 
 // Constructor with configuration
 DTS6012M_UART sensor(Serial1, config);
@@ -277,9 +290,14 @@ struct DTSStatistics {
 
 // Get statistics
 DTSStatistics stats = sensor.getStatistics();
-Serial.print("Success rate: ");
-Serial.print(100.0 * (stats.measurementCount - stats.errorCount) / stats.measurementCount);
-Serial.println("%");
+// measurementCount = valid frames, errorCount = failures (incl. timeouts).
+// They are disjoint counts, so the success rate is valid / (valid + errors).
+uint32_t total = stats.measurementCount + stats.errorCount;
+if (total > 0) {
+  Serial.print("Success rate: ");
+  Serial.print(100.0 * stats.measurementCount / total);
+  Serial.println("%");
+}
 
 // Reset statistics
 sensor.resetStatistics();
@@ -359,14 +377,23 @@ The library includes comprehensive examples:
 - **DTS6012M_UART_Example**: Enhanced basic usage with all features
 - **AdvancedFeatures**: Comprehensive feature demonstration
 - **ErrorHandlingDemo**: Robust error handling and recovery
+- **CompileTest**: Minimal sketch that exercises the API surface for CI compile checks
 
 ## Testing
 
-Run the comprehensive test suite:
+The unit tests run on a desktop host (no Arduino toolchain needed) — see
+[TESTING.md](TESTING.md). In short:
 
 ```bash
-# Load tests/test_DTS6012M_UART.cpp as Arduino sketch
+mkdir -p build
+g++ -std=c++17 -DDTS6012M_TEST_MODE -I. -Itests \
+    tests/test_DTS6012M_UART.cpp DTS6012M_UART.cpp -o build/dts_tests
+./build/dts_tests
 ```
+
+The test file defines `DTS6012M_TEST_MODE`, which swaps in a `HardwareSerial`
+stub; it is a host program (`main()` returns non-zero on failure), not an
+Arduino sketch, so it will not compile on-target.
 
 Test coverage includes:
 - ✅ Frame parsing and validation
@@ -380,8 +407,12 @@ Test coverage includes:
 ## Performance
 
 ### Measurement Rates
-- **Standard mode**: 50-100 Hz (CRC enabled)
-- **Fast mode**: 100-200 Hz (CRC disabled)
+The measurement rate is set by the **sensor**, not by host-side CRC checking.
+The DTS6012M streams at its configured frame rate (datasheet: typ. 100 fps, up
+to 1000 fps); change it with `setFrameRate()` / read it with `getFrameRate()`.
+Disabling CRC (`enableCRC(false)`) only saves a little parse time on very slow
+MCUs and does **not** raise the frame rate — leave CRC on unless you have
+measured a need.
 
 ### Memory Usage
 - **RAM**: ~0.5KB per sensor instance (128-byte circular buffer, 10-frame history, command/frame buffers, statistics)

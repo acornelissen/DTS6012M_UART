@@ -10,6 +10,7 @@ These instructions document how to build and run the DTS6012M UART library’s u
 
 ```bash
 cd /path/to/DTS6012M_UART
+mkdir -p build
 g++ -std=c++17 -DDTS6012M_TEST_MODE -I. -Itests \
     tests/test_DTS6012M_UART.cpp DTS6012M_UART.cpp \
     -o build/dts_tests
