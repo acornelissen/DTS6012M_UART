@@ -187,6 +187,12 @@ DTSResult DTS6012M_UART::update()
       _timedOut = true;
       _consecutiveErrors++;
       recordError(DTSError::TIMEOUT);
+      // The sensor has gone silent: stop presenting the last good frame as if it
+      // were current. Without this, getDistance()/isDataValid()/getFilteredDistance()
+      // report a frozen reading indefinitely after a disconnect — fail-dangerous
+      // for consumers that gate on isDataValid().
+      invalidateCurrentMeasurement();
+      clearMeasurementHistory();
     } else {
       _lastError = DTSError::TIMEOUT;
     }
@@ -675,6 +681,16 @@ void DTS6012M_UART::clearMeasurementHistory()
     _measurementHistory[i].primaryDistance_mm = DTS_INVALID_DISTANCE;
   }
   _historyIndex = 0;
+}
+
+void DTS6012M_UART::invalidateCurrentMeasurement()
+{
+  _currentMeasurement.primaryDistance_mm = DTS_INVALID_DISTANCE;
+  _currentMeasurement.secondaryDistance_mm = DTS_INVALID_DISTANCE;
+  _currentMeasurement.primaryIntensity = DTS_INVALID_INTENSITY;
+  _currentMeasurement.secondaryIntensity = DTS_INVALID_INTENSITY;
+  _currentMeasurement.primaryQuality = DataQuality::INVALID;
+  _currentMeasurement.secondaryQuality = DataQuality::INVALID;
 }
 
 void DTS6012M_UART::resetStatistics()

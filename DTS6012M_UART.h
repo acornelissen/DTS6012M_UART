@@ -654,6 +654,13 @@ private:
   void clearMeasurementHistory();
 
   /**
+   * @brief Mark the cached current measurement invalid (distance/intensity to
+   * their sentinels, quality to INVALID). Called on a comms timeout so getters
+   * and isDataValid() stop reporting the last good frame as if it were current.
+   */
+  void invalidateCurrentMeasurement();
+
+  /**
    * @brief Stop the measurement stream, flush stale bytes, send a command,
    *        read the response (skipping any interleaved measurement frames),
    *        and restart the stream.

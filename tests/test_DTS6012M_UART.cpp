@@ -1249,6 +1249,40 @@ void testOneShotRespectsDisabledStream() {
                            "One-shot restarts the stream when the host had it enabled");
 }
 
+void testStaleDataInvalidatedOnTimeout() {
+  Serial.println("Running Stale-Data-On-Timeout Tests...");
+
+  DTSConfig config;
+  config.timeout_ms = 1;
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Prime with several valid frames so the getters and median filter are live.
+  byte frame[23];
+  createValidFrame(frame); // 1000 mm
+  for (int i = 0; i < 5; i++) {
+    mockSerial.mockIncomingData(frame, 23);
+    sensor.update();
+  }
+  testFramework.assertTrue(sensor.isDataValid(), "Primed data reads as valid");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getDistance()), "Primed distance present");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getFilteredDistance()), "Primed median present");
+
+  // Sensor goes silent past the timeout window.
+  delay(3);
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT), static_cast<int>(r), "Stall reports TIMEOUT");
+
+  // The last good frame must no longer be presented as current/valid.
+  testFramework.assertTrue(!sensor.isDataValid(), "isDataValid() false after comms loss");
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE), static_cast<int>(sensor.getDistance()),
+                            "getDistance() returns sentinel after comms loss");
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE), static_cast<int>(sensor.getFilteredDistance()),
+                            "getFilteredDistance() returns sentinel after comms loss");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1292,6 +1326,7 @@ void runAllTests() {
   testEnableSensorRefreshesTimeoutClock();
   testBatchedParseErrorIsCounted();
   testOneShotRespectsDisabledStream();
+  testStaleDataInvalidatedOnTimeout();
 
   testFramework.printSummary();
 }
