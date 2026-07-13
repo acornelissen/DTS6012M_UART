@@ -214,8 +214,9 @@ void handleDegradedOperation() {
   if (result == DTSError::NONE) {
     metrics.validMeasurements++;
     
-    // Check if we can return to normal operation
-    if (dtsSensor.isDataValid() && dtsSensor.getDataQuality() >= DataQuality::FAIR) {
+    // Check if we can return to normal operation. Lower enum value = better
+    // quality (EXCELLENT=0 .. INVALID=4), so "at least FAIR" is <= FAIR.
+    if (dtsSensor.isDataValid() && dtsSensor.getDataQuality() <= DataQuality::FAIR) {
       errorState.errorCount = 0;
       Serial.println("Data quality improved - returning to NORMAL mode");
       changeOperationMode(OperationMode::NORMAL);

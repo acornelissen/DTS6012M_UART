@@ -51,22 +51,28 @@ void setup() {
 }
 
 void loop() {
-  // Process sensor data (v1.x compatible syntax)
-  if (dtsSensor.update()) {
+  // Call update() every loop so the hardware serial buffer never overflows
+  // between polls. At 921600 baud a delay(100) here would let far more than the
+  // AVR core's 64-byte RX buffer pile up, silently truncating frames.
+  bool newData = dtsSensor.update();
+
+  if (newData) {
     // Get measurement data
     uint16_t distance = dtsSensor.getDistance();
     uint16_t intensity = dtsSensor.getIntensity();
-    
-    // Print results
-    Serial.print("Distance: ");
-    if (distance == 0xFFFF) {
-      Serial.print("----");
-    } else {
-      Serial.print(distance);
+
+    // Throttle printing (not polling) to ~10 Hz so the serial monitor is readable.
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint >= 100) {
+      lastPrint = millis();
+      Serial.print("Distance: ");
+      if (distance == 0xFFFF) {
+        Serial.print("----");
+      } else {
+        Serial.print(distance);
+      }
+      Serial.print(" mm | Intensity: ");
+      Serial.println(intensity);
     }
-    Serial.print(" mm | Intensity: ");
-    Serial.println(intensity);
   }
-  
-  delay(100); // Print measurements every 100ms
 }
