@@ -1,0 +1,76 @@
+#######################################
+# Syntax Coloring Map For DTS6012M_UART
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+DTS6012M_UART	KEYWORD1
+DTSConfig	KEYWORD1
+DTSMeasurement	KEYWORD1
+DTSStatistics	KEYWORD1
+DTSResult	KEYWORD1
+DTSError	KEYWORD1
+DTSCommand	KEYWORD1
+DataQuality	KEYWORD1
+DTSCRCByteOrder	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+update	KEYWORD2
+getMeasurement	KEYWORD2
+getDistance	KEYWORD2
+getIntensity	KEYWORD2
+isDataValid	KEYWORD2
+getDataQuality	KEYWORD2
+getTemperatureCode	KEYWORD2
+hasSecondaryTarget	KEYWORD2
+newDataAvailable	KEYWORD2
+peekNewData	KEYWORD2
+waitForSensor	KEYWORD2
+getFirmwareVersion	KEYWORD2
+getSunlightBase	KEYWORD2
+getCorrection	KEYWORD2
+getSecondaryDistance	KEYWORD2
+getSecondaryIntensity	KEYWORD2
+sendCommand	KEYWORD2
+configure	KEYWORD2
+getConfig	KEYWORD2
+enableCRC	KEYWORD2
+setCRCByteOrder	KEYWORD2
+getCRCByteOrder	KEYWORD2
+getActiveCRCByteOrder	KEYWORD2
+setCRCAutoSwitchErrorThreshold	KEYWORD2
+getCRCAutoSwitchErrorThreshold	KEYWORD2
+enableSensor	KEYWORD2
+disableSensor	KEYWORD2
+setFrameRate	KEYWORD2
+getFrameRate	KEYWORD2
+setBaudRate	KEYWORD2
+writeIICRegister	KEYWORD2
+readIICRegister	KEYWORD2
+startHistogramStream	KEYWORD2
+startSPADHeatmapStream	KEYWORD2
+resetState	KEYWORD2
+factoryReset	KEYWORD2
+getStatistics	KEYWORD2
+getFilteredDistance	KEYWORD2
+resetStatistics	KEYWORD2
+getLastError	KEYWORD2
+getConsecutiveErrors	KEYWORD2
+clearError	KEYWORD2
+setDistanceOffset	KEYWORD2
+getDistanceOffset	KEYWORD2
+setDistanceScale	KEYWORD2
+getDistanceScale	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+DTS_INVALID_DISTANCE	LITERAL1
+DTS_INVALID_INTENSITY	LITERAL1

@@ -3,8 +3,10 @@
 // Add this for PROGMEM if an AVR microcontroller is used
 #if defined(ARDUINO_ARCH_AVR)
 #include <avr/pgmspace.h>
-#else
-// Define pgm_read_word_near for non-AVR architectures to make the code cleaner
+#elif !defined(pgm_read_word_near)
+// Provide pgm_read_word_near on non-AVR cores that don't already define it (some
+// ESP8266/RP2040 pgmspace shims do). Guarded to avoid a macro-redefinition
+// warning. Only the AVR path actually uses it; this keeps the code portable.
 #define pgm_read_word_near(addr) (*(const uint16_t *)(addr))
 #endif
 
@@ -1359,14 +1361,18 @@ DTSError DTS6012M_UART::processCircularBuffer()
             lastError = result;
           }
         } else {
-          // Buffer overflow - reset parse state and try again (keep buffered bytes)
+          // Unreachable in practice: a frame is parsed and the parser reset the
+          // instant _rxBufferIndex reaches DTS_RESPONSE_FRAME_LENGTH, so it is
+          // always below it here. Kept as a defensive resync; genuine ring
+          // overflow is detected and reported in update(), not here.
           resetParseState();
-          return DTSError::BUFFER_OVERFLOW;
         }
         break;
 
       case FrameState::FRAME_COMPLETE:
-        // Should not reach here
+        // Transient state: set just before parseFrame() and cleared by
+        // resetParseState() in the same iteration, so the switch never observes
+        // it on entry. Defensive resync only.
         resetParseState();
         break;
     }
@@ -1473,15 +1479,17 @@ bool DTS6012M_UART::validateFrameCRC(uint16_t calculatedCRC)
 
 uint16_t DTS6012M_UART::extractFrameCRC(DTSCRCByteOrder order) const
 {
-  const int crcLsbIndex = DTS_RESPONSE_FRAME_LENGTH - 2;
-  const int crcMsbIndex = DTS_RESPONSE_FRAME_LENGTH - 1;
+  // The two CRC bytes on the wire, named by wire position (not by which half of
+  // the CRC they carry — that depends on the byte order below).
+  const int firstCrcByte = DTS_RESPONSE_FRAME_LENGTH - 2;
+  const int secondCrcByte = DTS_RESPONSE_FRAME_LENGTH - 1;
 
   if (order == DTSCRCByteOrder::MSB_THEN_LSB) {
-    return ((uint16_t)_rxBuffer[crcLsbIndex] << 8) | _rxBuffer[crcMsbIndex];
+    return ((uint16_t)_rxBuffer[firstCrcByte] << 8) | _rxBuffer[secondCrcByte];
   }
 
   // Default and AUTO fallback: LSB then MSB on wire.
-  return ((uint16_t)_rxBuffer[crcMsbIndex] << 8) | _rxBuffer[crcLsbIndex];
+  return ((uint16_t)_rxBuffer[secondCrcByte] << 8) | _rxBuffer[firstCrcByte];
 }
 
 void DTS6012M_UART::appendCommandCRC(byte *buffer, int &index, uint16_t crc) const
