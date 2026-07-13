@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "DTS6012M_UART",
+  "project_id": "3cc9e544-3d2e-4e38-b804-68f066225e35"
+}
