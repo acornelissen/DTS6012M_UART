@@ -1357,6 +1357,55 @@ void testResyncAfterGarbageBurst() {
                             "Resync: correct distance after garbage burst");
 }
 
+void testAutoCRCNoFlipOnGenuineCorruption() {
+  Serial.println("Running AUTO CRC No-Flip-On-Corruption Tests...");
+
+  DTSConfig config = {
+    .baudRate = 921600,
+    .timeout_ms = 1000,
+    .crcEnabled = true,
+    .maxValidDistance_mm = 18000,
+    .minValidDistance_mm = 20,
+    .minIntensityThreshold = 100,
+    .crcByteOrder = DTSCRCByteOrder::AUTO,
+    .crcAutoSwitchErrorThreshold = 3
+  };
+
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Frames whose CRC is wrong under BOTH byte orders (genuine corruption, not a
+  // byte-order mismatch): corrupt both CRC bytes of an otherwise-valid frame.
+  byte corrupt[23];
+  createValidFrame(corrupt, DTSCRCByteOrder::MSB_THEN_LSB);
+  corrupt[21] ^= 0xFF;
+  corrupt[22] ^= 0xA5;
+
+  for (int i = 0; i < 3; i++) {   // reach the switch threshold
+    mockSerial.mockIncomingData(corrupt, 23);
+    DTSError r = sensor.update();
+    testFramework.assertEqual(static_cast<int>(DTSError::CRC_CHECK_FAILED), static_cast<int>(r),
+                              "Corrupt frame fails CRC under AUTO");
+  }
+
+  // The active order must NOT have flipped: the alternate order also failed, so
+  // adopting it would have rejected the next several good frames.
+  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::MSB_THEN_LSB),
+                            static_cast<int>(sensor.getActiveCRCByteOrder()),
+                            "AUTO keeps its order on genuine corruption (no blind flip)");
+
+  // A subsequent valid MSB-ordered frame still validates, proving the order was
+  // not wrongly switched away from the sensor's real ordering.
+  byte good[23];
+  createValidFrame(good, DTSCRCByteOrder::MSB_THEN_LSB);
+  mockSerial.mockIncomingData(good, 23);
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(r),
+                            "Valid MSB frame still accepted after corruption burst");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1404,6 +1453,7 @@ void runAllTests() {
   testSendOneShotRejectsOversizedLength();
   testResyncAfterFalseHeader();
   testResyncAfterGarbageBurst();
+  testAutoCRCNoFlipOnGenuineCorruption();
 
   testFramework.printSummary();
 }

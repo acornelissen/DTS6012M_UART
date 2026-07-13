@@ -1360,14 +1360,18 @@ bool DTS6012M_UART::validateFrameCRC(uint16_t calculatedCRC)
   if (_crcByteOrderMode == DTSCRCByteOrder::AUTO) {
     _crcErrorStreak++;
     if (_crcErrorStreak >= _config.crcAutoSwitchErrorThreshold) {
-      _activeCRCByteOrder = (_activeCRCByteOrder == DTSCRCByteOrder::LSB_THEN_MSB)
-                                ? DTSCRCByteOrder::MSB_THEN_LSB
-                                : DTSCRCByteOrder::LSB_THEN_MSB;
       _crcErrorStreak = 0;
 
-      // Retry current frame with the alternate ordering immediately.
-      receivedCRC = extractFrameCRC(_activeCRCByteOrder);
-      if (calculatedCRC == receivedCRC) {
+      // Try the alternate ordering on this frame, but ADOPT it only if it
+      // actually validates. A frame that fails under both orders is genuine
+      // corruption, not a byte-order mismatch — switching to an order that also
+      // fails would then reject the next `threshold` good frames before flipping
+      // back. So keep the current order unless the alternate is confirmed.
+      DTSCRCByteOrder alternate = (_activeCRCByteOrder == DTSCRCByteOrder::LSB_THEN_MSB)
+                                      ? DTSCRCByteOrder::MSB_THEN_LSB
+                                      : DTSCRCByteOrder::LSB_THEN_MSB;
+      if (calculatedCRC == extractFrameCRC(alternate)) {
+        _activeCRCByteOrder = alternate;
         return true;
       }
     }
