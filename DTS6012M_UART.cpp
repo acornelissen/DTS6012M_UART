@@ -867,35 +867,32 @@ void DTS6012M_UART::sendCommand(byte cmd, const byte *dataPayload, uint16_t payl
     return;
   }
 
-  const size_t frameSize = static_cast<size_t>(9u + payloadLength);
-  byte *frame = static_cast<byte *>(malloc(frameSize));
-  if (frame == nullptr) {
-    recordError(DTSError::INVALID_COMMAND);
-    return;
-  }
+  // Heap-free large-payload path: write the 7-byte header, then the payload,
+  // then the 2 CRC bytes as separate chunks, folding each into a running CRC.
+  // Avoids a malloc/free per call (fragmentation risk on small AVR heaps).
+  byte header[7] = {
+    DTS_HEADER, DTS_DEVICE_NO, DTS_DEVICE_TYPE, cmd, 0x00,
+    static_cast<byte>((payloadLength >> 8) & 0xFF),
+    static_cast<byte>(payloadLength & 0xFF)
+  };
 
-  int frameIndex = 0;
-  frame[frameIndex++] = DTS_HEADER;
-  frame[frameIndex++] = DTS_DEVICE_NO;
-  frame[frameIndex++] = DTS_DEVICE_TYPE;
-  frame[frameIndex++] = cmd;
-  frame[frameIndex++] = 0x00;
-  frame[frameIndex++] = (payloadLength >> 8) & 0xFF;
-  frame[frameIndex++] = payloadLength & 0xFF;
-
+  uint16_t crc = crc16Accumulate(0xFFFF, header, 7);
   if (dataPayload != nullptr && payloadLength > 0) {
-    memcpy(&frame[frameIndex], dataPayload, payloadLength);
-    frameIndex += payloadLength;
+    crc = crc16Accumulate(crc, dataPayload, payloadLength);
   }
+  byte crcBytes[2];
+  int crcIndex = 0;
+  appendCommandCRC(crcBytes, crcIndex, crc);
 
-  uint16_t crc = calculateCRC16(frame, frameIndex);
-  appendCommandCRC(frame, frameIndex, crc);
-  size_t bytesWritten = _serial.write(frame, frameIndex);
-  free(frame);
+  size_t written = _serial.write(header, 7);
+  if (dataPayload != nullptr && payloadLength > 0) {
+    written += _serial.write(dataPayload, payloadLength);
+  }
+  written += _serial.write(crcBytes, 2);
 
   // Report a short write like the enum overload does, so a truncated command
   // on the large-payload path isn't silently dropped.
-  if (bytesWritten != static_cast<size_t>(frameIndex)) {
+  if (written != static_cast<size_t>(9u + payloadLength)) {
     recordError(DTSError::SERIAL_INIT_FAILED);
   }
 }
@@ -1167,10 +1164,8 @@ static constexpr uint16_t crc_table[256] = {
     0x4040
 };
 
-uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
+uint16_t DTS6012M_UART::crc16Accumulate(uint16_t crc, const byte *data, int len) const
 {
-  uint16_t crc = 0xFFFF; // Initial value
-
   for (int i = 0; i < len; i++)
   {
     byte index = (byte)(crc ^ data[i]); // LSB of CRC XORed with current data byte
@@ -1181,6 +1176,11 @@ uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
 #endif
   }
   return crc; // No final XOR for standard Modbus CRC
+}
+
+uint16_t DTS6012M_UART::calculateCRC16(const byte *data, int len) const
+{
+  return crc16Accumulate(0xFFFF, data, len); // Modbus initial value
 }
 
 // --- Enhanced Private Helper Methods ---
@@ -1268,6 +1268,13 @@ uint16_t DTS6012M_UART::applyCalibratedDistance(uint16_t rawDistance) const
   // offset would fabricate a plausible reading at exactly the offset distance.
   if (rawDistance == DTS_INVALID_DISTANCE || rawDistance == 0) {
     return DTS_INVALID_DISTANCE;
+  }
+
+  // Identity calibration fast path: skip the float multiply/add entirely when no
+  // offset or scaling is configured. On 8-bit AVR this avoids pulling in the
+  // soft-float routines for every frame (primary + secondary) in the common case.
+  if (_distanceScale == 1.0f && _distanceOffset_mm == 0) {
+    return rawDistance;
   }
 
   // Apply scaling and offset

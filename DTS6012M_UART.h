@@ -133,7 +133,12 @@ struct DTSConfig {
 constexpr int DTS_RESPONSE_FRAME_LENGTH = 23;
 constexpr int DTS_DATA_LENGTH_EXPECTED = 14;
 constexpr int DTS_MAX_COMMAND_FRAME_SIZE = 32;
-constexpr int DTS_CIRCULAR_BUFFER_SIZE = 128;
+
+// Circular receive buffer size. Overridable (e.g. -DDTS_CIRCULAR_BUFFER_SIZE=64)
+// to trade RAM for headroom on small targets; must exceed one 23-byte frame.
+#ifndef DTS_CIRCULAR_BUFFER_SIZE
+#define DTS_CIRCULAR_BUFFER_SIZE 128
+#endif
 
 // Indices within the 14-byte data payload (LSB first ordering)
 constexpr int DTS_IDX_SEC_DIST = 0;
@@ -148,8 +153,12 @@ constexpr int DTS_IDX_SUN_BASE = 12;
 constexpr uint16_t DTS_INVALID_DISTANCE = 0xFFFF;
 constexpr uint16_t DTS_INVALID_INTENSITY = 0x0000;
 
-// History buffer size for data logging
-constexpr int DTS_HISTORY_BUFFER_SIZE = 10;
+// History buffer size for the median filter / statistics. Overridable (e.g.
+// -DDTS_HISTORY_BUFFER_SIZE=5) to shrink per-instance RAM on small targets;
+// must be at least 3 for getFilteredDistance() to return a median.
+#ifndef DTS_HISTORY_BUFFER_SIZE
+#define DTS_HISTORY_BUFFER_SIZE 10
+#endif
 
 // Backward compatibility wrapper for DTSError to bool conversion
 struct DTSResult {
@@ -605,6 +614,13 @@ private:
    * @return Calculated CRC-16 value
    */
   uint16_t calculateCRC16(const byte *data, int len) const;
+
+  /**
+   * @brief Continue a CRC-16 from a running value over more data. Lets a frame's
+   * CRC be computed across separate header/payload chunks without a single
+   * contiguous buffer (used by the heap-free legacy command path).
+   */
+  uint16_t crc16Accumulate(uint16_t crc, const byte *data, int len) const;
 
   /**
    * @brief Validate measurement data quality
