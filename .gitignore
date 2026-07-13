@@ -1,4 +1,7 @@
 
+# Host test build artifacts
+build/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
