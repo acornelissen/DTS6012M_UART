@@ -1283,6 +1283,29 @@ void testStaleDataInvalidatedOnTimeout() {
                             "getFilteredDistance() returns sentinel after comms loss");
 }
 
+void testSendOneShotRejectsOversizedLength() {
+  Serial.println("Running One-Shot Oversized-Length Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // Response header claims a corrupted, huge data length (0x8000 = 32768) but
+  // only a few bytes follow. The frame-size math must not overflow (it is
+  // computed in a 32-bit type; on 16-bit-int AVR the old int math wrapped
+  // negative and bypassed the truncation guard, driving an OOB read). The
+  // truncation guard must fire and report TIMEOUT, never success-with-garbage.
+  byte resp[9] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x80, 0x00, 0xAA, 0xBB};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 9);
+
+  uint16_t fps = 0;
+  DTSError r = sensor.getFrameRate(fps, 50);
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT), static_cast<int>(r),
+                            "Oversized response length returns TIMEOUT, not garbage success");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1327,6 +1350,7 @@ void runAllTests() {
   testBatchedParseErrorIsCounted();
   testOneShotRespectsDisabledStream();
   testStaleDataInvalidatedOnTimeout();
+  testSendOneShotRejectsOversizedLength();
 
   testFramework.printSummary();
 }

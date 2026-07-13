@@ -1432,11 +1432,16 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     if (hdrIdx < 7) break;
 
     uint16_t dataLen = ((uint16_t)hdr[5] << 8) | hdr[6];
-    int totalFrame = 7 + dataLen + 2; // header + data + CRC
+    // Compute frame sizes in a 32-bit type. On 16-bit-int AVR, 7 + dataLen + 2
+    // with a corrupted length (dataLen >= ~32759, read before any CRC check)
+    // would wrap negative, defeating both the buffer clamp and the short-read
+    // guard below and driving an out-of-bounds read in the CRC step. long is
+    // wide enough on every supported core that the guards work as intended.
+    long totalFrame = 7L + (long)dataLen + 2; // header + data + CRC
 
     // Wrong command? Skip this frame's remaining bytes.
     if (hdr[3] != cmdByte) {
-      int toSkip = dataLen + 2;
+      long toSkip = (long)dataLen + 2;
       while (toSkip > 0 && (millis() - start) < timeout_ms) {
         if (_serial.available()) { _serial.read(); toSkip--; }
       }
@@ -1457,14 +1462,14 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     // A short read means the response was truncated (timed out mid-frame, or the
     // frame is larger than the caller's buffer). We can't validate or trust a
     // partial frame, so report failure instead of returning success with garbage.
-    if (bytesRead < 7 + (int)dataLen + 2) {
+    if ((long)bytesRead < 7L + (long)dataLen + 2) {
       restoreStreamAfterOneShot();
       return DTSError::TIMEOUT;
     }
 
     // Validate CRC over the complete frame (data + 2 CRC bytes)
     if (_config.crcEnabled) {
-      int frameWithoutCRC = 7 + dataLen;
+      int frameWithoutCRC = 7 + (int)dataLen;
       uint16_t calcCRC = calculateCRC16(responseBuf, frameWithoutCRC);
 
       bool crcOk = (calcCRC == decodeResponseCRC(responseBuf, frameWithoutCRC, _activeCRCByteOrder));
