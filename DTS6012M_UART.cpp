@@ -1219,8 +1219,39 @@ DTSError DTS6012M_UART::processCircularBuffer()
         
       case FrameState::RECEIVING_FRAME:
         if (_rxBufferIndex < DTS_RESPONSE_FRAME_LENGTH) {
+          // Validate the fixed header bytes (device no / type / command) as they
+          // arrive. A spurious 0xA5 from line noise would otherwise latch the
+          // parser, which then consumes the next 22 bytes as this "frame" — and
+          // if a genuine frame header sits inside them, it is lost, desyncing
+          // until the timeout. Catching a mismatch here costs at most a few
+          // bytes, and the offending byte is re-examined as a possible header.
+          bool headerByteOk = true;
+          if (_rxBufferIndex == 1) {
+            headerByteOk = (currentByte == DTS_DEVICE_NO);
+          } else if (_rxBufferIndex == 2) {
+            headerByteOk = (currentByte == DTS_DEVICE_TYPE);
+          } else if (_rxBufferIndex == 3) {
+            headerByteOk = (currentByte == static_cast<byte>(DTSCommand::START_STREAM));
+          }
+
+          if (!headerByteOk) {
+            // A latched 0xA5 that isn't followed by the expected device/type/
+            // command bytes is an anomaly (noise or corruption): count it once,
+            // like a rejected full frame, then resync.
+            recordError(DTSError::FRAME_HEADER_INVALID);
+            lastError = DTSError::FRAME_HEADER_INVALID;
+            resetParseState();
+            // The byte that broke the header might itself be the real 0xA5.
+            if (currentByte == DTS_HEADER) {
+              _rxBuffer[0] = currentByte;
+              _rxBufferIndex = 1;
+              _frameState = FrameState::RECEIVING_FRAME;
+            }
+            break;
+          }
+
           _rxBuffer[_rxBufferIndex++] = currentByte;
-          
+
           if (_rxBufferIndex >= DTS_RESPONSE_FRAME_LENGTH) {
             _frameState = FrameState::FRAME_COMPLETE;
             DTSError result = parseFrame();

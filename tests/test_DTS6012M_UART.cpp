@@ -1306,6 +1306,57 @@ void testSendOneShotRejectsOversizedLength() {
                             "Oversized response length returns TIMEOUT, not garbage success");
 }
 
+void testResyncAfterFalseHeader() {
+  Serial.println("Running False-Header Resync Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // A spurious 0xA5 (line noise) immediately followed by a genuine valid frame.
+  // The old parser latched the noise byte and consumed the real frame's header
+  // as this "frame's" body, losing the frame. Incremental header validation must
+  // reject the noise within a couple of bytes and recover the real frame.
+  byte stream[24];
+  stream[0] = 0xA5; // false header (noise)
+  byte frame[23];
+  createValidFrame(frame); // 1000 mm
+  memcpy(stream + 1, frame, 23);
+  mockSerial.mockIncomingData(stream, 24);
+
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(r),
+                            "Resync: valid frame parsed despite a leading false 0xA5");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getDistance()),
+                            "Resync: correct distance recovered after false header");
+}
+
+void testResyncAfterGarbageBurst() {
+  Serial.println("Running Garbage-Burst Resync Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Garbage that includes a mid-frame 0xA5 with a wrong device byte, then a real
+  // frame. Must resync to the genuine frame.
+  byte stream[29];
+  stream[0] = 0x11; stream[1] = 0xA5; stream[2] = 0x99; stream[3] = 0x22;
+  stream[4] = 0xA5; stream[5] = 0x00;   // 0xA5 followed by wrong device no
+  byte frame[23];
+  createValidFrame(frame);
+  memcpy(stream + 6, frame, 23);
+  mockSerial.mockIncomingData(stream, 29);
+
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(r),
+                            "Resync: recovers a valid frame after a garbage burst with stray 0xA5 bytes");
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getDistance()),
+                            "Resync: correct distance after garbage burst");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1351,6 +1402,8 @@ void runAllTests() {
   testOneShotRespectsDisabledStream();
   testStaleDataInvalidatedOnTimeout();
   testSendOneShotRejectsOversizedLength();
+  testResyncAfterFalseHeader();
+  testResyncAfterGarbageBurst();
 
   testFramework.printSummary();
 }
