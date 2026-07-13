@@ -269,8 +269,26 @@ public:
   /**
    * @brief Check whether update() produced a new frame since the last call
    * @return true exactly once per new frame
+   * @note Edge-triggered: reading it clears the flag. Use peekNewData() for a
+   *       non-destructive check when more than one caller needs to see it.
    */
   bool newDataAvailable();
+
+  /**
+   * @brief Non-destructive version of newDataAvailable(): reports whether a new
+   *        frame is pending without clearing the flag.
+   */
+  bool peekNewData() const;
+
+  /**
+   * @brief Block until the sensor delivers a valid frame or the timeout elapses.
+   *        Useful right after begin() to confirm a sensor is actually connected
+   *        and streaming (begin() itself only opens the port and writes the
+   *        start command, so it succeeds even with no sensor attached).
+   * @param timeout_ms Maximum time to wait
+   * @return DTSError::NONE if a valid frame arrived, DTSError::TIMEOUT otherwise
+   */
+  DTSError waitForSensor(unsigned long timeout_ms = 1000);
 
   /**
    * @brief Query sensor firmware version (command 0x0A)
@@ -309,8 +327,28 @@ public:
    * @brief Configure sensor parameters
    * @param config New configuration structure
    * @return DTSError::NONE on success, error code on failure
+   * @note Only reconfigures the local UART. A changed baudRate re-opens the host
+   *       port but does NOT command the sensor to change rate — use setBaudRate()
+   *       for that, or the host and sensor will be at mismatched rates.
    */
   DTSError configure(const DTSConfig &config);
+
+  /**
+   * @brief Get a copy of the current effective configuration (as last set by the
+   *        constructor, configure(), or begin()). Complements the write-only
+   *        configure()/setters so a sketch can read back what is in effect.
+   */
+  DTSConfig getConfig() const;
+
+  /**
+   * @brief Get the current distance calibration offset (mm).
+   */
+  int16_t getDistanceOffset() const;
+
+  /**
+   * @brief Get the current distance calibration scale factor.
+   */
+  float getDistanceScale() const;
 
   /**
    * @brief Enable/disable CRC validation with immediate effect

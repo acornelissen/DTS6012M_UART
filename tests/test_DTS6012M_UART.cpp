@@ -1598,6 +1598,68 @@ void testMeasurementLastErrorPopulated() {
   testFramework.assertTrue(m.lastError != DTSError::NONE, "lastError is populated after an error");
 }
 
+void testConfigAndCalibrationAccessors() {
+  Serial.println("Running Config/Calibration Accessor Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+
+  // begin(baud) must store the baud so getConfig() reports it (and setBaudRate's
+  // revert path uses the real rate, not the struct default).
+  sensor.begin(115200);
+  testFramework.assertEqual(115200, static_cast<int>(sensor.getConfig().baudRate),
+                            "begin(baud) is reflected in getConfig()");
+
+  sensor.setDistanceOffset(25);
+  sensor.setDistanceScale(1.5f);
+  testFramework.assertEqual(25, static_cast<int>(sensor.getDistanceOffset()),
+                            "getDistanceOffset returns the set offset");
+  testFramework.assertTrue(sensor.getDistanceScale() > 1.49f && sensor.getDistanceScale() < 1.51f,
+                           "getDistanceScale returns the set scale");
+}
+
+void testPeekNewDataNonDestructive() {
+  Serial.println("Running peekNewData Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  byte frame[23];
+  createValidFrame(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+
+  // peek must report the pending flag without clearing it (repeatable), then
+  // newDataAvailable() consumes it once.
+  testFramework.assertTrue(sensor.peekNewData(), "peekNewData true after a frame");
+  testFramework.assertTrue(sensor.peekNewData(), "peekNewData is non-destructive");
+  testFramework.assertTrue(sensor.newDataAvailable(), "newDataAvailable consumes the flag");
+  testFramework.assertTrue(!sensor.peekNewData(), "peekNewData false after consumption");
+}
+
+void testWaitForSensor() {
+  Serial.println("Running waitForSensor Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // No data: waitForSensor times out.
+  testFramework.assertEqual(static_cast<int>(DTSError::TIMEOUT),
+                            static_cast<int>(sensor.waitForSensor(20)),
+                            "waitForSensor times out with no sensor");
+
+  // A frame present: waitForSensor returns NONE.
+  byte frame[23];
+  createValidFrame(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE),
+                            static_cast<int>(sensor.waitForSensor(100)),
+                            "waitForSensor succeeds when a valid frame arrives");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1653,6 +1715,9 @@ void runAllTests() {
   testStatisticsExcludePoorReadings();
   testSecondaryDistanceSentinel();
   testMeasurementLastErrorPopulated();
+  testConfigAndCalibrationAccessors();
+  testPeekNewDataNonDestructive();
+  testWaitForSensor();
 
   testFramework.printSummary();
 }

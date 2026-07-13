@@ -360,6 +360,23 @@ bool DTS6012M_UART::newDataAvailable()
   return avail;
 }
 
+bool DTS6012M_UART::peekNewData() const
+{
+  return _newDataFlag;
+}
+
+DTSError DTS6012M_UART::waitForSensor(unsigned long timeout_ms)
+{
+  unsigned long start = millis();
+  while ((millis() - start) < timeout_ms) {
+    yield();
+    if (update() == DTSError::NONE) {
+      return DTSError::NONE;
+    }
+  }
+  return DTSError::TIMEOUT;
+}
+
 DTSError DTS6012M_UART::getFirmwareVersion(byte *versionBuffer, uint8_t bufferSize, uint8_t &responseLength, unsigned long timeout_ms)
 {
   byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
@@ -395,9 +412,30 @@ DTSError DTS6012M_UART::configure(const DTSConfig &config)
       recordError(DTSError::SERIAL_INIT_FAILED);
       return DTSError::SERIAL_INIT_FAILED;
     }
+
+    // Bytes captured at the old rate are now garbage; clear the frame/ring state
+    // and refresh the timeout clock so the reopen doesn't spew parse errors or
+    // trip an immediate false TIMEOUT.
+    resetFrameState();
+    markStreamActive();
   }
 
   return DTSError::NONE;
+}
+
+DTSConfig DTS6012M_UART::getConfig() const
+{
+  return _config;
+}
+
+int16_t DTS6012M_UART::getDistanceOffset() const
+{
+  return _distanceOffset_mm;
+}
+
+float DTS6012M_UART::getDistanceScale() const
+{
+  return _distanceScale;
 }
 
 void DTS6012M_UART::enableCRC(bool enable)
