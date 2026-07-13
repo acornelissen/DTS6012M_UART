@@ -114,42 +114,50 @@ DTSResult DTS6012M_UART::begin(unsigned long baudRate, int8_t rxPin, int8_t txPi
  */
 DTSResult DTS6012M_UART::update()
 {
-  DTSError result = DTSError::NONE;
   bool newFrameReceived = false;
-
-  // Process all available bytes using circular buffer
   bool bufferOverflowed = false;
   bool readAny = false;
+  DTSError lastParseError = DTSError::NO_NEW_DATA;
+
+  // Interleave reading from the serial FIFO with parsing. Draining the entire
+  // FIFO into the 128-byte ring first would overwrite bytes that were still
+  // intact upstream whenever the FIFO is larger than the ring (e.g. ESP32's
+  // 256-byte HW buffer with infrequent polling). Filling only until the ring is
+  // near full, then parsing to free space, means every queued frame is parsed.
   while (_serial.available() > 0) {
-    byte incomingByte = _serial.read();
-    readAny = true;
+    while (_serial.available() > 0) {
+      int used = (_circularBufferHead - _circularBufferTail + DTS_CIRCULAR_BUFFER_SIZE)
+                 % DTS_CIRCULAR_BUFFER_SIZE;
+      if (used >= DTS_CIRCULAR_BUFFER_SIZE - 1) {
+        break;  // ring full — parse before reading more
+      }
+      _circularBuffer[_circularBufferHead] = _serial.read();
+      _circularBufferHead = (_circularBufferHead + 1) % DTS_CIRCULAR_BUFFER_SIZE;
+      readAny = true;
+    }
 
-    // Store in circular buffer
-    _circularBuffer[_circularBufferHead] = incomingByte;
-    _circularBufferHead = (_circularBufferHead + 1) % DTS_CIRCULAR_BUFFER_SIZE;
+    // Drain every complete frame currently buffered; freshest wins.
+    for (;;) {
+      DTSError result = processCircularBuffer();
+      if (result == DTSError::NONE) {
+        newFrameReceived = true;
+        markStreamActive();
+        _consecutiveErrors = 0;
+        _lastError = DTSError::NONE;
+      } else {
+        lastParseError = result;
+        break;  // No more complete frames available right now
+      }
+    }
 
-    // Ring full: advancing the tail drops the oldest unparsed byte, which can
-    // desync frame alignment. Flag it so the loss is reported, not silent.
-    if (_circularBufferHead == _circularBufferTail) {
+    // If the ring is still full after draining and bytes are still waiting, a
+    // single partial frame is genuinely wedging the buffer: drop its oldest byte
+    // to make progress and report the loss rather than spin forever.
+    int usedAfter = (_circularBufferHead - _circularBufferTail + DTS_CIRCULAR_BUFFER_SIZE)
+                    % DTS_CIRCULAR_BUFFER_SIZE;
+    if (_serial.available() > 0 && usedAfter >= DTS_CIRCULAR_BUFFER_SIZE - 1) {
       _circularBufferTail = (_circularBufferTail + 1) % DTS_CIRCULAR_BUFFER_SIZE;
       bufferOverflowed = true;
-    }
-  }
-  
-  // Drain circular buffer so _currentMeasurement always holds the freshest
-  // reading, even when multiple frames have queued up at high frame rates.
-  // lastParseError stays NO_NEW_DATA unless an actual parse error occurs.
-  DTSError lastParseError = DTSError::NO_NEW_DATA;
-  for (;;) {
-    result = processCircularBuffer();
-    if (result == DTSError::NONE) {
-      newFrameReceived = true;
-      markStreamActive();
-      _consecutiveErrors = 0;
-      _lastError = DTSError::NONE;
-    } else {
-      lastParseError = result;
-      break;  // No more complete frames available
     }
   }
 

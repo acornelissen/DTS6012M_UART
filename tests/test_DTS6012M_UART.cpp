@@ -930,23 +930,40 @@ void testEsp32PinPersistence() {
   testFramework.assertEqual(17, mock.lastTxPin, "configure() re-begin preserves TX pin");
 }
 
-void testCircularBufferOverflowReported() {
-  Serial.println("Running Circular Buffer Overflow Tests...");
+void testLargeBurstFullyParsedNoLoss() {
+  Serial.println("Running Large-Burst No-Loss Tests...");
 
   DTS6012M_UART sensor(mockSerial);
   sensor.begin();
   sensor.resetState();
   mockSerial.resetMock();
 
-  // Feed more bytes than the 128-byte ring can hold (127 usable) in one update().
-  byte flood[130];
-  for (int i = 0; i < 130; i++) flood[i] = 0x00;   // no valid header among them
-  mockSerial.mockIncomingData(flood, 130);
+  // Six back-to-back valid frames = 138 bytes, more than the 128-byte ring can
+  // hold at once. The old "drain the whole FIFO into the ring, then parse"
+  // approach overwrote the earliest frames (a reported BUFFER_OVERFLOW with real
+  // data loss). Interleaving read and parse must consume all six with no loss.
+  const int N = 6;
+  byte burst[N * 23];
+  uint16_t distances[N] = {1000, 1100, 1200, 1300, 1400, 1500};
+  for (int i = 0; i < N; i++) {
+    byte *f = burst + i * 23;
+    createValidFrame(f);
+    f[13] = distances[i] & 0xFF;
+    f[14] = (distances[i] >> 8) & 0xFF;
+    updateFrameCRC(f);
+  }
+  mockSerial.mockIncomingData(burst, N * 23);
 
-  sensor.update();
-  testFramework.assertEqual(static_cast<int>(DTSError::BUFFER_OVERFLOW), static_cast<int>(sensor.getLastError()), "Ring overflow is reported via getLastError()");
+  DTSError r = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(r),
+                            "Large burst: update() succeeds");
   DTSStatistics stats = sensor.getStatistics();
-  testFramework.assertTrue(stats.errorCount >= 1, "Ring overflow increments the error count");
+  testFramework.assertEqual(N, static_cast<int>(stats.measurementCount),
+                            "Large burst: all frames parsed, none lost to the ring");
+  testFramework.assertEqual(1500, static_cast<int>(sensor.getDistance()),
+                            "Large burst: freshest frame wins");
+  testFramework.assertTrue(sensor.getLastError() != DTSError::BUFFER_OVERFLOW,
+                           "Large burst: no false overflow when frames are parsed in step");
 }
 
 void testConsecutiveErrorsCounter() {
@@ -1692,7 +1709,7 @@ void runAllTests() {
   testUpdateRealTimeout();
   testOneShotAutoCRCSwitch();
   testEsp32PinPersistence();
-  testCircularBufferOverflowReported();
+  testLargeBurstFullyParsedNoLoss();
   testConsecutiveErrorsCounter();
   testLegacyLargePayloadShortWriteReported();
   testRawZeroDistanceStaysInvalidWithOffset();
