@@ -542,6 +542,7 @@ DTSError DTS6012M_UART::setBaudRate(unsigned long newBaudRate, unsigned long tim
   unsigned long start = millis();
   bool gotFrame = false;
   while ((millis() - start) < timeout_ms) {
+    yield();   // keep the ESP8266 soft watchdog fed during the verify wait
     if (_serial.available()) {
       byte b = _serial.read();
       if (b == DTS_HEADER) {
@@ -1461,6 +1462,9 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
   bytesRead = 0;
 
   while ((millis() - start) < timeout_ms) {
+    // Service background tasks / feed the soft watchdog. Without this, a long
+    // caller-supplied timeout on a silent sensor resets an ESP8266.
+    yield();
     // Wait for header byte
     if (!_serial.available()) continue;
     byte b = _serial.read();
@@ -1471,6 +1475,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     hdr[0] = DTS_HEADER;
     int hdrIdx = 1;
     while (hdrIdx < 7 && (millis() - start) < timeout_ms) {
+      yield();
       if (_serial.available()) {
         hdr[hdrIdx++] = _serial.read();
       }
@@ -1489,6 +1494,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     if (hdr[3] != cmdByte) {
       long toSkip = (long)dataLen + 2;
       while (toSkip > 0 && (millis() - start) < timeout_ms) {
+        yield();
         if (_serial.available()) { _serial.read(); toSkip--; }
       }
       continue;
@@ -1499,6 +1505,7 @@ DTSError DTS6012M_UART::sendOneShot(DTSCommand cmd, const byte *payload, uint16_
     memcpy(responseBuf, hdr, 7);
     int idx = 7;
     while (idx < totalFrame && (millis() - start) < timeout_ms) {
+      yield();
       if (_serial.available()) {
         responseBuf[idx++] = _serial.read();
       }

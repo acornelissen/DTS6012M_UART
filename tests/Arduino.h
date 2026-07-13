@@ -29,6 +29,10 @@ inline void delay(unsigned long ms)
   std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+// On real cores yield() services background tasks (WiFi, soft watchdog). No-op
+// on the host so the library's blocking wait loops compile and run under tests.
+inline void yield() {}
+
 class Stream
 {
 public:
