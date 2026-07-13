@@ -622,6 +622,14 @@ private:
   void resetCRCByteOrderState();
 
   /**
+   * @brief Invalidate the median-filter history so getFilteredDistance()
+   *        returns DTS_INVALID_DISTANCE until fresh frames re-prime it.
+   *        Called by resetState() and disableSensor() — stale history from
+   *        before a recovery or standby describes the previous subject.
+   */
+  void clearMeasurementHistory();
+
+  /**
    * @brief Stop the measurement stream, flush stale bytes, send a command,
    *        read the response (skipping any interleaved measurement frames),
    *        and restart the stream.

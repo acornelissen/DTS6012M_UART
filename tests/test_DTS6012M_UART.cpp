@@ -983,6 +983,119 @@ void testLegacyLargePayloadShortWriteReported() {
   testFramework.assertEqual(static_cast<int>(DTSError::SERIAL_INIT_FAILED), static_cast<int>(sensor.getLastError()), "Legacy large-payload short write is reported");
 }
 
+void testRawZeroDistanceStaysInvalidWithOffset() {
+  Serial.println("Running Raw-Zero Distance Calibration Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  // Host geometry offset, as configured by the MRF2 firmware (400 mm).
+  sensor.setDistanceOffset(400);
+
+  // A no-return frame reporting raw distance 0 must stay invalid: applying
+  // the offset to it would fabricate a plausible-looking 400 mm reading.
+  byte frame[23];
+  createValidFrame(frame);
+  frame[13] = 0x00; frame[14] = 0x00; // Primary distance = 0 (no return)
+  updateFrameCRC(frame);
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE),
+                            static_cast<int>(sensor.getDistance()),
+                            "Raw 0 distance stays invalid despite offset");
+
+  // A genuine reading still gets the offset applied.
+  createValidFrame(frame); // 1000 mm
+  mockSerial.mockIncomingData(frame, 23);
+  sensor.update();
+  testFramework.assertEqual(1400, static_cast<int>(sensor.getDistance()),
+                            "Real reading still calibrated with offset");
+}
+
+void testAutoCRCDetectionSurvivesHostRecovery() {
+  Serial.println("Running AUTO CRC Detection Across Host Recovery Tests...");
+
+  DTSConfig config = {
+    .baudRate = 921600,
+    .timeout_ms = 1000,
+    .crcEnabled = true,
+    .maxValidDistance_mm = 18000,
+    .minValidDistance_mm = 20,
+    .minIntensityThreshold = 100,
+    .crcByteOrder = DTSCRCByteOrder::AUTO,
+    .crcAutoSwitchErrorThreshold = 3
+  };
+
+  DTS6012M_UART sensor(mockSerial, config);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  byte lsbFirstFrame[23];
+  createValidFrame(lsbFirstFrame, DTSCRCByteOrder::LSB_THEN_MSB);
+
+  // Two CRC failures, then the host's error-recovery path runs (the MRF2
+  // firmware calls clearError() + resetState() every few CRC errors). If
+  // recovery wipes the byte-order streak, AUTO detection can never reach its
+  // threshold on a LSB-first sensor variant and the host recovery-loops
+  // forever.
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
+  sensor.update();
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
+  sensor.update();
+
+  sensor.clearError();
+  sensor.resetState();
+
+  // Third consecutive CRC failure must still reach the threshold and switch.
+  mockSerial.mockIncomingData(lsbFirstFrame, 23);
+  DTSError result = sensor.update();
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result),
+                            "AUTO switch threshold survives host clearError/resetState");
+  testFramework.assertEqual(static_cast<int>(DTSCRCByteOrder::LSB_THEN_MSB),
+                            static_cast<int>(sensor.getActiveCRCByteOrder()),
+                            "AUTO mode switched after host recovery");
+}
+
+void testMedianHistoryClearedByResetAndDisable() {
+  Serial.println("Running Median History Reset Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  byte frame[23];
+  createValidFrame(frame); // 1000 mm
+  for (int i = 0; i < 5; i++) {
+    mockSerial.mockIncomingData(frame, 23);
+    sensor.update();
+  }
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getFilteredDistance()),
+                            "Median filter primed with history");
+
+  // Host recovery resets state: stale history must not survive to bias the
+  // first readings after the sensor comes back (previous-subject median).
+  sensor.resetState();
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE),
+                            static_cast<int>(sensor.getFilteredDistance()),
+                            "resetState clears median history");
+
+  // Re-prime, then standby via disableSensor: same requirement on wake.
+  for (int i = 0; i < 5; i++) {
+    mockSerial.mockIncomingData(frame, 23);
+    sensor.update();
+  }
+  testFramework.assertEqual(1000, static_cast<int>(sensor.getFilteredDistance()),
+                            "Median filter re-primed");
+  sensor.disableSensor();
+  testFramework.assertEqual(static_cast<int>(DTS_INVALID_DISTANCE),
+                            static_cast<int>(sensor.getFilteredDistance()),
+                            "disableSensor clears median history");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1018,6 +1131,9 @@ void runAllTests() {
   testCircularBufferOverflowReported();
   testConsecutiveErrorsCounter();
   testLegacyLargePayloadShortWriteReported();
+  testRawZeroDistanceStaysInvalidWithOffset();
+  testAutoCRCDetectionSurvivesHostRecovery();
+  testMedianHistoryClearedByResetAndDisable();
 
   testFramework.printSummary();
 }

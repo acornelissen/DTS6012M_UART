@@ -4,3 +4,15 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# AI assistant guidance files (kept locally, not shared via the repo)
+CLAUDE.md
+**/CLAUDE.md
+
+# Beads tracker and Claude tooling — local-only state, not shared via the repo
+AGENTS.md
+.claude/
+.beads/
+.beads/proxieddb/
+.agents/
+.codex/

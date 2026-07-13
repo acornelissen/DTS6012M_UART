@@ -413,7 +413,14 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Changelog
 
-### v2.7.0 (Latest)
+### v2.8.0 (Latest)
+Accuracy fixes from an MRF2 firmware accuracy review. Backward compatible; no public API changes, but three behavioural corrections callers should know about:
+- Raw distance 0 (a no-return frame; the sensor's minimum valid distance is 20 mm) is now reported as `DTS_INVALID_DISTANCE` instead of being scaled and offset into a plausible-looking reading at exactly the configured `setDistanceOffset()` distance.
+- `resetState()` and `clearError()` no longer wipe the AUTO CRC byte-order detection streak. Hosts that call them from error-recovery paths (typically every few CRC errors) could otherwise never reach the auto-switch threshold on an LSB-first sensor variant, recovery-looping forever. Byte-order detection now resets only in `begin()` and `setCRCByteOrder()`.
+- `resetState()` and `disableSensor()` clear the median-filter history, so `getFilteredDistance()` returns `DTS_INVALID_DISTANCE` until fresh frames re-prime it instead of reporting the pre-standby subject's median for the first frames after wake.
+- Added tests for all three (86 tests, all passing).
+
+### v2.7.0
 Robustness and diagnostics cleanup from the firmware-library review (all backward compatible; public API only gains `getConsecutiveErrors()`).
 - Ring-buffer overflow in `update()` (more bytes arrive than the 128-byte buffer holds in one call, e.g. on ESP32 with infrequent polling) is now reported via `getLastError()` / statistics `errorCount` instead of silently dropping the oldest bytes.
 - Added `getConsecutiveErrors()` — exposes the consecutive-parse-error counter the library already tracks (resets on any valid frame), so sketches can drive recovery logic without re-counting.

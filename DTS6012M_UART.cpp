@@ -410,6 +410,10 @@ DTSResult DTS6012M_UART::enableSensor()
 
 DTSResult DTS6012M_UART::disableSensor()
 {
+  // The median history describes the subject the sensor was aimed at before
+  // standby; the camera may be pointing somewhere else entirely on wake, and a
+  // stale median would report the previous subject for the first frames.
+  clearMeasurementHistory();
   return DTSResult(sendCommand(DTSCommand::STOP_STREAM, nullptr, 0));
 }
 
@@ -570,13 +574,19 @@ DTSError DTS6012M_UART::startSPADHeatmapStream()
 DTSError DTS6012M_UART::resetState()
 {
   resetStatistics();
+  clearMeasurementHistory();
   _distanceOffset_mm = 0;
   _distanceScale = 1.0f;
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
   _newDataFlag = false;
-  resetCRCByteOrderState();
-  
+  // Deliberately NOT resetCRCByteOrderState(): hosts call resetState() from
+  // their error-recovery paths, typically after only a few CRC failures. On a
+  // sensor variant with the opposite CRC byte order, wiping the AUTO-detection
+  // streak here means the switch threshold is never reached and the host
+  // recovery-loops forever. Byte-order detection resets only in begin() and
+  // setCRCByteOrder().
+
   return DTSError::NONE;
 }
 
@@ -626,6 +636,14 @@ uint16_t DTS6012M_UART::getFilteredDistance() const
   return valid[count / 2];
 }
 
+void DTS6012M_UART::clearMeasurementHistory()
+{
+  for (int i = 0; i < DTS_HISTORY_BUFFER_SIZE; i++) {
+    _measurementHistory[i].primaryDistance_mm = DTS_INVALID_DISTANCE;
+  }
+  _historyIndex = 0;
+}
+
 void DTS6012M_UART::resetStatistics()
 {
   _statistics = {
@@ -651,7 +669,8 @@ void DTS6012M_UART::clearError()
 {
   _lastError = DTSError::NONE;
   _consecutiveErrors = 0;
-  _crcErrorStreak = 0;
+  // _crcErrorStreak is AUTO byte-order detection state, not error status; see
+  // the note in resetState().
 }
 
 // --- Calibration Methods ---
@@ -1111,10 +1130,13 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
 
 uint16_t DTS6012M_UART::applyCalibratedDistance(uint16_t rawDistance) const
 {
-  if (rawDistance == DTS_INVALID_DISTANCE) {
+  // Raw 0 is a no-return frame, not a measurement at the aperture (the sensor's
+  // minimum valid distance is 20 mm). Scaling it and adding the host's geometry
+  // offset would fabricate a plausible reading at exactly the offset distance.
+  if (rawDistance == DTS_INVALID_DISTANCE || rawDistance == 0) {
     return DTS_INVALID_DISTANCE;
   }
-  
+
   // Apply scaling and offset
   float calibratedDistance = (rawDistance * _distanceScale) + _distanceOffset_mm;
   
