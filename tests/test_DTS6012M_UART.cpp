@@ -1406,6 +1406,58 @@ void testAutoCRCNoFlipOnGenuineCorruption() {
                             "Valid MSB frame still accepted after corruption burst");
 }
 
+void testGetFrameRateLargeAck() {
+  Serial.println("Running getFrameRate Large-ACK Tests...");
+
+  OneShotMockSerial mock;
+  DTSConfig config;
+  config.crcEnabled = false;
+  DTS6012M_UART sensor(mock, config);
+  sensor.begin();
+
+  // ACK carries dataLen=8 → 17-byte frame, larger than the old 16-byte buffer.
+  // fps value (0x000A = 10) sits in the first two payload bytes.
+  byte resp[17] = {0xA5, 0x03, 0x20, 0x1B, 0x00, 0x00, 0x08,
+                   0x00, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0};
+  mock.setResponse(static_cast<byte>(DTSCommand::GET_FRAME_RATE), resp, 17);
+
+  uint16_t fps = 0;
+  DTSError result = sensor.getFrameRate(fps, 50);
+  testFramework.assertEqual(static_cast<int>(DTSError::NONE), static_cast<int>(result),
+                            "getFrameRate accepts an ACK larger than 16 bytes");
+  testFramework.assertEqual(10, static_cast<int>(fps), "getFrameRate parses fps from a large ACK");
+}
+
+void testAvgDistanceDoesNotFreeze() {
+  Serial.println("Running avgDistance No-Freeze Tests...");
+
+  DTS6012M_UART sensor(mockSerial);
+  sensor.begin();
+  sensor.resetState();
+  mockSerial.resetMock();
+
+  byte frame[23];
+  // 100 samples at 1000 mm, then 100 at 10000 mm. True mean = 5500. The old
+  // incremental integer average truncated (new-avg)/count toward zero and could
+  // never reach the true mean once count grew; the 64-bit running sum is exact.
+  uint16_t distances[2] = {1000, 10000};
+  for (int phase = 0; phase < 2; phase++) {
+    for (int i = 0; i < 100; i++) {
+      createValidFrame(frame);
+      frame[13] = distances[phase] & 0xFF;
+      frame[14] = (distances[phase] >> 8) & 0xFF;
+      updateFrameCRC(frame);
+      mockSerial.mockIncomingData(frame, 23);
+      sensor.update();
+    }
+  }
+
+  DTSStatistics stats = sensor.getStatistics();
+  testFramework.assertEqual(200, static_cast<int>(stats.measurementCount), "avg test: all 200 samples counted");
+  testFramework.assertEqual(5500, static_cast<int>(stats.avgDistance),
+                            "avgDistance is the exact running mean, not a frozen value");
+}
+
 // Main test runner
 void runAllTests() {
   Serial.println("==========================================");
@@ -1454,6 +1506,8 @@ void runAllTests() {
   testResyncAfterFalseHeader();
   testResyncAfterGarbageBurst();
   testAutoCRCNoFlipOnGenuineCorruption();
+  testGetFrameRateLargeAck();
+  testAvgDistanceDoesNotFreeze();
 
   testFramework.printSummary();
 }

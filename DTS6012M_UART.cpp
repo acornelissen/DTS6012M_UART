@@ -469,7 +469,11 @@ DTSError DTS6012M_UART::setFrameRate(uint16_t fps)
 
 DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
 {
-  byte buf[16];
+  // Buffer sized to hold a full ACK frame so a larger-than-expected response is
+  // read completely, not falsely reported as truncated (TIMEOUT) — matching
+  // setFrameRate()/writeIICRegister(). The old 16-byte buffer missed the v2.6.0
+  // enlargement and could false-TIMEOUT on an oversized GET_FRAME_RATE ACK.
+  byte buf[DTS_MAX_COMMAND_FRAME_SIZE + 32];
   int bytesRead = 0;
   DTSError err = sendOneShot(DTSCommand::GET_FRAME_RATE, nullptr, 0,
                               buf, sizeof(buf), bytesRead, timeout_ms);
@@ -480,6 +484,11 @@ DTSError DTS6012M_UART::getFrameRate(uint16_t &fps, unsigned long timeout_ms)
     // Response carried no frame-rate value; don't report success with fps untouched.
     return DTSError::FRAME_LENGTH_INVALID;
   }
+  // NOTE: the fps field is decoded MSB-first here (matching setFrameRate()'s
+  // encoding), which is self-consistent but opposite the LSB-first ordering of
+  // the streaming measurement payload. The command-response byte order is not
+  // documented in the public datasheet; if a sensor returns fps byte-swapped,
+  // this is the line to revisit. See task 91l.17.
   fps = ((uint16_t)buf[7] << 8) | buf[8];
   return DTSError::NONE;
 }
@@ -702,6 +711,7 @@ void DTS6012M_UART::resetStatistics()
     .measurementCount = 0,
     .errorCount = 0
   };
+  _distanceSum = 0;
 }
 
 DTSError DTS6012M_UART::getLastError() const
@@ -1169,11 +1179,12 @@ void DTS6012M_UART::updateStatistics(const DTSMeasurement &measurement)
       _statistics.maxDistance = measurement.primaryDistance_mm;
     }
     
-    // Incremental average: avg += (new - avg) / count  (overflow-safe, signed to handle new < avg).
-    // The int32 cast of measurementCount is safe until ~2.1 billion measurements
-    // (~248 days at 100 Hz); resetStatistics() well before then if it ever matters.
-    int32_t delta = (int32_t)measurement.primaryDistance_mm - (int32_t)_statistics.avgDistance;
-    _statistics.avgDistance = (uint32_t)((int32_t)_statistics.avgDistance + delta / (int32_t)_statistics.measurementCount);
+    // True running mean from a 64-bit sum. The previous incremental integer form
+    // (avg += (new - avg)/count) truncated to zero once count exceeded a typical
+    // delta, freezing avgDistance. Summing in uint64_t is exact and cannot
+    // overflow in any realistic run (2^64 / 65535 samples).
+    _distanceSum += measurement.primaryDistance_mm;
+    _statistics.avgDistance = (uint32_t)(_distanceSum / _statistics.measurementCount);
   }
 }
 

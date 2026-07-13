@@ -508,6 +508,11 @@ private:
   
   // Statistics and error tracking
   DTSStatistics _statistics;
+  // Running sum of the distances folded into avgDistance, kept in 64-bit so the
+  // reported mean is exact and never freezes (the old incremental integer form
+  // truncated (new-avg)/count to zero once count grew large). Divided by
+  // measurementCount to produce _statistics.avgDistance.
+  uint64_t _distanceSum;
   DTSError _lastError;
   uint16_t _consecutiveErrors;
   DTSCRCByteOrder _crcByteOrderMode;
